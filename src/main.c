@@ -136,7 +136,7 @@ static void set_console_progress(const SIZE_T pass, const SIZE_T total, const do
 	}
 	else
 	{
-		_snwprintf_s(buffer, 64U, _TRUNCATE, L"[%llu] %.1f%% - Memory Checker", pass, progress);
+		_snwprintf_s(buffer, 64U, _TRUNCATE, L"[%llu/\u221E] %.1f%% - Memory Checker", pass, progress);
 	}
 	SetConsoleTitleW(buffer);
 }
