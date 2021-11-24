@@ -14,14 +14,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <process.h>
+#include "crc64table.h"
+#include "version.h"
 
 #define MAX_CHUNKS 4096U
 #define MAX_THREAD   32U
 #define NUM_PASSES    5U
 
 #define MIN_MEMORY (512U * 1024U * 1024U)
-
-#include "crc64table.h"
 
 /* ====================================================================== */
 /* Typedefs                                                               */
@@ -58,6 +58,8 @@ chunk_t;
 /* ====================================================================== */
 /* Globals                                                                */
 /* ====================================================================== */
+
+static const char* const BUILD_DATE = __DATE__;
 
 static chunk_t CHUNKS[MAX_CHUNKS];
 static ULONG64 CRC[MAX_CHUNKS];
@@ -290,7 +292,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	meminfo_t phys_memory;
 	HANDLE thread[MAX_THREAD];
 
-	fputs("Memory Checker [" __DATE__ "], by LoRd_MuldeR <MuldeR2@GMX.de>\n", stderr);
+	fprintf(stderr, "Memory Checker v%u.%02u-%u [%s], by LoRd_MuldeR <MuldeR2@GMX.de>\n", MEMCK_VERSION_MAJOR, (10U * MEMCK_VERSION_MINOR_HI) + MEMCK_VERSION_MINOR_LO, MEMCK_VERSION_PATCH, BUILD_DATE);
 	fputs("This work has been released under the CC0 1.0 Universal license!\n\n", stderr);
 
 	SetConsoleTitleW(L"Memory Checker");

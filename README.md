@@ -30,6 +30,9 @@ The *Memory Checker* program is invoked as follows:
 
     MemoryChecker.exe [OPTIONS] [<memory_size>] [<threads>]
 
+**Note:** Its is *highly* recommended to close all other programs running on your machine before the Memory Checker tool is invoked!
+
+
 Options
 -------
 
@@ -59,11 +62,11 @@ Once the required memory has been allocated, the actual testing begins. By defau
 Limitations
 ===========
 
-Like *any* memory testing tool that runs a program under a “normal” operating system, the Memory Checker can **not** access and test *100%* of the physical memory.
+Like *any* memory testing tool that runs as a program under a “normal” operating system, the Memory Checker can **not** access and test *100%* of the physical memory.
 
 The operating system *reserves* a certain fraction of the physical memory for its own purposes. This “reserved” memory can **not** be tested.
 
-Also, the Memory Checker does **not** allocate as much physical memory as it can possibly get; a certain proportion of the memory is spared, so that the system remains responsive.
+Also, the Memory Checker does **not** allocate as much memory as possible; a certain proportion of the memory is spared, so that the system remains responsive.
 
 This means that even though the Memory Checker *can* reveal a large number of memory problems, there is **no** hard guarantee that it will detect *any* possible problem!
 
