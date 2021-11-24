@@ -17,7 +17,7 @@
 
 #define MAX_CHUNKS 4096U
 #define MAX_THREAD   32U
-#define NUM_PASSES    3U
+#define NUM_PASSES    5U
 
 #define MIN_MEMORY (512U * 1024U * 1024U)
 
@@ -66,6 +66,8 @@ static SIZE_T num_chunks = 0U, num_threads = 0U;
 
 static volatile SIZE_T completed = 0U;
 static volatile SIZE_T crc_error = 0U;
+
+static volatile BOOL stop = FALSE;
 
 /* ====================================================================== */
 /* Utility Functions                                                      */
@@ -123,6 +125,20 @@ static PVOID allocate_chunk(const SIZE_T size)
 		VirtualFree(addr, 0, MEM_RELEASE);
 	}
 	return NULL;
+}
+
+static void set_console_progress(const SIZE_T pass, const SIZE_T total, const double progress)
+{
+	wchar_t buffer[64U];
+	if (total > 0U)
+	{
+		_snwprintf_s(buffer, 64U, _TRUNCATE, L"[%llu/%llu] %.1f%% - Memory Checker", pass, total, progress);
+	}
+	else
+	{
+		_snwprintf_s(buffer, 64U, _TRUNCATE, L"[%llu] %.1f%% - Memory Checker", pass, progress);
+	}
+	SetConsoleTitleW(buffer);
 }
 
 static void random_init(rand_state_t *const state)
@@ -193,6 +209,20 @@ static inline SIZE_T round_up(const SIZE_T number, const SIZE_T multiple)
 	return number;
 }
 
+static BOOL WINAPI console_ctrl_handler(const DWORD ctrl_type)
+{
+	switch (ctrl_type)
+	{
+	case CTRL_C_EVENT:
+	case CTRL_BREAK_EVENT:
+	case CTRL_CLOSE_EVENT:
+		stop = TRUE;
+		return TRUE;
+	default:
+		return FALSE;
+	}
+}
+
 /* ====================================================================== */
 /* Thread                                                                 */
 /* ====================================================================== */
@@ -205,7 +235,7 @@ static DWORD thread_fill(void *const arg)
 
 	random_init(&rand_state);
 
-	for (chunk_idx = id; chunk_idx < num_chunks; chunk_idx += num_threads)
+	for (chunk_idx = id; (!stop) && (chunk_idx < num_chunks); chunk_idx += num_threads)
 	{
 		ULONG64* const crc = &CRC[chunk_idx];
 		*crc = (ULONG64)~0;
@@ -219,7 +249,7 @@ static DWORD thread_fill(void *const arg)
 		InterlockedAdd64(&completed, CHUNKS[chunk_idx].size);
 	}
 
-	return EXIT_SUCCESS;
+	return stop ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
 static DWORD thread_check(void *const arg)
@@ -227,7 +257,7 @@ static DWORD thread_check(void *const arg)
 	SIZE_T chunk_idx;
 	const SIZE_T id = (SIZE_T)arg;
 
-	for (chunk_idx = id; chunk_idx < num_chunks; chunk_idx += num_threads)
+	for (chunk_idx = id; (!stop) && (chunk_idx < num_chunks); chunk_idx += num_threads)
 	{
 		ULONG64 crc = (ULONG64)~0;
 		BYTE* const limit = CHUNKS[chunk_idx].addr + CHUNKS[chunk_idx].size;
@@ -244,7 +274,7 @@ static DWORD thread_check(void *const arg)
 		InterlockedAdd64(&completed, CHUNKS[chunk_idx].size);
 	}
 
-	return EXIT_SUCCESS;
+	return stop ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
 /* ====================================================================== */
@@ -253,35 +283,70 @@ static DWORD thread_check(void *const arg)
 
 static int memchecker_main(const int argc, const wchar_t* const argv[])
 {
-	int exit_code = EXIT_FAILURE;
+	int exit_code = EXIT_FAILURE, arg_offset = 1;
 	SIZE_T target_memory = 0U, allocated_memory = 0U, page_size = 0U;
-	SIZE_T chunk_size, working_set_size, pass, progress, chunk_idx, thread_idx;
+	SIZE_T chunk_size, working_set_size, pass, completed_last, chunk_idx, thread_idx;
+	BOOL batch_mode = FALSE, continuous_mode = FALSE;
 	meminfo_t phys_memory;
 	HANDLE thread[MAX_THREAD];
 
 	fputs("Memory Checker [" __DATE__ "], by LoRd_MuldeR <MuldeR2@GMX.de>\n", stderr);
 	fputs("This work has been released under the CC0 1.0 Universal license!\n\n", stderr);
-	if (argc > 1)
+
+	SetConsoleTitleW(L"Memory Checker");
+
+	while (arg_offset < argc)
 	{
-		if ((!_wcsicmp(argv[1], L"-h")) || (!_wcsicmp(argv[1], L"/?")) || (!_wcsicmp(argv[1], L"--help")))
+		if ((!_wcsicmp(argv[arg_offset], L"-h")) || (!_wcsicmp(argv[arg_offset], L"/?")) || (!_wcsicmp(argv[arg_offset], L"-?")) || (!_wcsicmp(argv[arg_offset], L"--help")))
 		{
 			fputs("Usage:\n", stderr);
-			fputs("  MemoryChecker.exe [<memory_size>] [<threads>]\n\n", stderr);
-			fputs("Default memory size to test is ~95% of total physical memory.\n\n", stderr);
+			fputs("  MemoryChecker.exe [--batch] [--continuous] [<memory_size>] [<threads>]\n\n", stderr);
+			fputs("Default memory size to test is ~95% of the total physical memory.\n\n", stderr);
 			return EXIT_SUCCESS;
 		}
-		if (!(target_memory = wcstoull(argv[1], NULL, 10)))
+		if ((argv[arg_offset][0U] == L'-') && (argv[arg_offset][1U] == L'-'))
 		{
-			fprintf(stderr, "The specified memory size is invalid: \"%S\"\n\n", argv[1]);
+			const wchar_t *const option = argv[arg_offset++] + 2U;
+			if (option[0U] != L'\0')
+			{
+				if (!_wcsicmp(option, L"batch"))
+				{
+					batch_mode = TRUE;
+				}
+				else if (!_wcsicmp(option, L"continuous"))
+				{
+					continuous_mode = TRUE;
+				}
+				else
+				{
+					fprintf(stderr, "The specified option is unknown: \"--%S\"\n\n", option);
+					return EXIT_FAILURE;
+				}
+				continue;
+			}
+		}
+		break; /*no more options*/
+	}
+
+	if (arg_offset < argc)
+	{
+		const wchar_t *const value = argv[arg_offset++];
+		target_memory = wcstoull(value, NULL, 10);
+		if (!target_memory)
+		{
+			fprintf(stderr, "The specified memory size is invalid: \"%S\"\n\n", value);
 			return EXIT_FAILURE;
 		}
-		if (argc > 2)
+	}
+
+	if (arg_offset < argc)
+	{
+		const wchar_t *const value = argv[arg_offset++];
+		num_threads = wcstoull(value, NULL, 10);
+		if (!num_threads)
 		{
-			if (!(num_threads = wcstoull(argv[2], NULL, 10)))
-			{
-				fprintf(stderr, "The specified thread count is invalid: \"%S\"\n\n", argv[2]);
-				return EXIT_FAILURE;
-			}
+			fprintf(stderr, "The specified thread count is invalid: \"%S\"\n\n", value);
+			return EXIT_FAILURE;
 		}
 	}
 
@@ -344,21 +409,22 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	working_set_size = round_up(target_memory + get_max(204800U, get_min_working_set_size()), page_size);
 	if (!SetProcessWorkingSetSize(GetCurrentProcess(), working_set_size, working_set_size))
 	{
-		fputs("WARNING: Failed to set working set size. Memory allocation is probably goinf to fail!\n\n", stderr);
+		fputs("WARNING: Failed to set working set size. Memory allocation is probably going to fail!\n\n", stderr);
 	}
 
 	fputs("Allocating memory, please be patient, this will take a while...\n", stderr);
 	fputs("0.0%", stderr);
 	fflush(stderr);
+	set_console_progress(0, continuous_mode ? 0U : NUM_PASSES, 0.0);
 
 	SecureZeroMemory(CHUNKS, sizeof(chunk_t) * MAX_CHUNKS);
 	chunk_size = round_up(128U * 1024U * 1024U, page_size);
 
-	while ((chunk_size >= page_size) && (allocated_memory < target_memory))
+	while ((!stop) && (chunk_size >= page_size) && (allocated_memory < target_memory))
 	{
 		SIZE_T remaining = target_memory - allocated_memory;
 		ULONG32 retry_counter = 0U;
-		while ((remaining >= chunk_size) && (num_chunks < MAX_CHUNKS))
+		while ((!stop) && (remaining >= chunk_size) && (num_chunks < MAX_CHUNKS))
 		{
 			LPVOID addr = allocate_chunk(chunk_size);
 			if (addr)
@@ -369,8 +435,10 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 				allocated_memory += chunk_size;
 				remaining = (allocated_memory < target_memory) ? target_memory - allocated_memory : 0U;
 				retry_counter = 0U;
-				fprintf(stderr, "\r%.1f%%", 100.0 * ((double)allocated_memory / target_memory));
+				const double progress = 100.0 * ((double)allocated_memory / target_memory);
+				fprintf(stderr, "\r%.1f%%", progress);
 				fflush(stderr);
+				set_console_progress(0, continuous_mode ? 0U : NUM_PASSES, progress);
 			}
 			else
 			{
@@ -384,8 +452,15 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		chunk_size = (chunk_size > page_size) ? round_up(chunk_size / 2U, page_size) : (page_size / 2U);
 	}
 
+	if (stop)
+	{
+		fputs("\rInterrupted!\n\n", stderr);
+		goto cleanup;
+	}
+
 	fprintf(stderr, "\r%.1f%% [OK]\n\n", 100.0 * ((double)allocated_memory / target_memory));
 	fflush(stderr);
+	set_console_progress(0, continuous_mode ? 0U : NUM_PASSES, 100.0);
 
 	fprintf(stderr, "Allocated memory : %012llu (0x%010llX)\n\n", allocated_memory, allocated_memory);
 
@@ -399,10 +474,18 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	/* Test memory                                           */
 	/* ----------------------------------------------------- */
 
-	for (pass = 0U; pass < NUM_PASSES; ++pass)
+	for (pass = 0U; continuous_mode || (pass < NUM_PASSES); ++pass)
 	{
-		fprintf(stderr, "--- [ Pass %llu of %llu ] ---\n\n", pass + 1U, (SIZE_T)NUM_PASSES);
-		fflush(stderr);
+		if (!continuous_mode)
+		{
+			fprintf(stderr, "--- [ Pass %llu of %llu ] ---\n\n", pass + 1U, (SIZE_T)NUM_PASSES);
+			fflush(stderr);
+		}
+		else
+		{
+			fprintf(stderr, "--- [ Testing pass %llu ] ---\n\n", pass + 1U);
+			fflush(stderr);
+		}
 
 		/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 		/* Fill memory                               */
@@ -411,8 +494,9 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		fputs("Writing memory, please be patient, this will take a while...\n", stderr);
 		fputs("0.0%", stderr);
 		fflush(stderr);
+		set_console_progress(pass + 1U, continuous_mode ? 0U : NUM_PASSES, 0.0);
 
-		completed = progress = 0U;
+		completed = completed_last = 0U;
 
 		for (thread_idx = 0U; thread_idx < num_threads; ++thread_idx)
 		{
@@ -425,7 +509,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			}
 		}
 
-		for (;;)
+		while (!stop)
 		{
 			const DWORD result = WaitForMultipleObjects((DWORD)num_threads, thread, TRUE, 1250U);
 			if ((result >= WAIT_OBJECT_0) && (result < WAIT_OBJECT_0 + num_threads))
@@ -434,12 +518,14 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			}
 			else if (result == WAIT_TIMEOUT)
 			{
-				const SIZE_T current = completed;
-				if (current != progress)
+				const SIZE_T completed_current = completed;
+				if (completed_current != completed_last)
 				{
-					fprintf(stderr, "\r%.1f%%", 100.0 * ((double)current / allocated_memory));
+					const double progress = 100.0 * ((double)completed_current / allocated_memory);
+					fprintf(stderr, "\r%.1f%%", progress);
 					fflush(stderr);
-					progress = current;
+					set_console_progress(pass + 1U, continuous_mode ? 0U : NUM_PASSES, 0.5 * progress);
+					completed_last = completed_current;
 				}
 			}
 			else
@@ -452,7 +538,17 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		for (thread_idx = 0U; thread_idx < num_threads; ++thread_idx)
 		{
+			if (WaitForSingleObject(thread[thread_idx], 0U) != WAIT_OBJECT_0)
+			{
+				TerminateThread(thread[thread_idx], EXIT_FAILURE);
+			}
 			CloseHandle(thread[thread_idx]);
+		}
+
+		if (stop)
+		{
+			fputs("\rInterrupted!\n\n", stderr);
+			goto cleanup;
 		}
 
 		fprintf(stderr, "\r%.1f%% [OK]\n\n", 100.0 * ((double)completed / allocated_memory));
@@ -465,8 +561,9 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		fputs("Reading memory, please be patient, this will take a while...\n", stderr);
 		fputs("0.0%", stderr);
 		fflush(stderr);
+		set_console_progress(pass + 1U, continuous_mode ? 0U : NUM_PASSES, 50.0);
 
-		completed = progress = 0U;
+		completed = completed_last = 0U;
 
 		for (thread_idx = 0U; thread_idx < num_threads; ++thread_idx)
 		{
@@ -479,7 +576,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			}
 		}
 
-		for (;;)
+		while (!stop)
 		{
 			const DWORD result = WaitForMultipleObjects((DWORD)num_threads, thread, TRUE, 1250U);
 			if ((result >= WAIT_OBJECT_0) && (result < WAIT_OBJECT_0 + num_threads))
@@ -488,12 +585,14 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			}
 			else if (result == WAIT_TIMEOUT)
 			{
-				const SIZE_T current = completed;
-				if (current != progress)
+				const SIZE_T completed_current = completed;
+				if (completed_current != completed_last)
 				{
-					fprintf(stderr, "\r%.1f%%", 100.0 * ((double)current / allocated_memory));
+					const double progress = 100.0 * ((double)completed_current / allocated_memory);
+					fprintf(stderr, "\r%.1f%%", progress);
 					fflush(stderr);
-					progress = current;
+					set_console_progress(pass + 1U, continuous_mode ? 0U : NUM_PASSES, 50.0 + (0.5 * progress));
+					completed_last = completed_current;
 				}
 			}
 			else
@@ -506,6 +605,10 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		for (thread_idx = 0U; thread_idx < num_threads; ++thread_idx)
 		{
+			if (WaitForSingleObject(thread[thread_idx], 0U) != WAIT_OBJECT_0)
+			{
+				TerminateThread(thread[thread_idx], EXIT_FAILURE);
+			}
 			CloseHandle(thread[thread_idx]);
 		}
 
@@ -516,8 +619,15 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			goto cleanup;
 		}
 
+		if (stop)
+		{
+			fputs("\rInterrupted!\n\n", stderr);
+			goto cleanup;
+		}
+
 		fprintf(stderr, "\r%.1f%% [OK]\n\n", 100.0 * ((double)completed / allocated_memory));
 		fflush(stderr);
+		set_console_progress(pass + 1U, continuous_mode ? 0U : NUM_PASSES, 100.0);
 	}
 
 	/* ----------------------------------------------------- */
@@ -544,6 +654,12 @@ cleanup:
 	}
 
 	fputs("Goodbye!\n\n", stderr);
+
+	if (!(batch_mode || stop))
+	{
+		system("pause"); /*prevent terminal from closing*/
+	}
+
 	return exit_code;
 }
 
@@ -551,6 +667,7 @@ int wmain(const int argc, const wchar_t *const argv[])
 {
 	__try
 	{
+		SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
 		return memchecker_main(argc, argv);
 	}
 	__except(1)
