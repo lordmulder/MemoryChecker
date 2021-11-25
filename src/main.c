@@ -11,6 +11,7 @@
 #define WIN32_LEAN_AND_MEAN 1
 
 #include <Windows.h>
+#include <versionhelpers.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <process.h>
@@ -95,16 +96,6 @@ static SIZE_T get_page_size()
 	SecureZeroMemory(&info, sizeof(SYSTEM_INFO));
 	GetSystemInfo(&info);
 	return info.dwPageSize;
-}
-
-static SIZE_T get_min_working_set_size()
-{
-	SIZE_T min_size, max_size;
-	if (GetProcessWorkingSetSize(GetCurrentProcess(), &min_size, &max_size))
-	{
-		return min_size;
-	}
-	return 0U;
 }
 
 static SIZE_T get_cpu_count()
@@ -239,7 +230,7 @@ static DWORD thread_fill(void *const arg)
 
 	for (chunk_idx = id; (!stop) && (chunk_idx < num_chunks); chunk_idx += num_threads)
 	{
-		ULONG64* const crc = &CRC[chunk_idx];
+		ULONG64 *const crc = &CRC[chunk_idx];
 		*crc = (ULONG64)~0;
 		BYTE *const limit = CHUNKS[chunk_idx].addr + CHUNKS[chunk_idx].size;
 		for (BYTE *addr = CHUNKS[chunk_idx].addr; addr < limit; addr += sizeof(ULONG32))
@@ -262,8 +253,8 @@ static DWORD thread_check(void *const arg)
 	for (chunk_idx = id; (!stop) && (chunk_idx < num_chunks); chunk_idx += num_threads)
 	{
 		ULONG64 crc = (ULONG64)~0;
-		BYTE* const limit = CHUNKS[chunk_idx].addr + CHUNKS[chunk_idx].size;
-		for (BYTE* addr = CHUNKS[chunk_idx].addr; addr < limit; addr += sizeof(ULONG32))
+		BYTE *const limit = CHUNKS[chunk_idx].addr + CHUNKS[chunk_idx].size;
+		for (BYTE *addr = CHUNKS[chunk_idx].addr; addr < limit; addr += sizeof(ULONG32))
 		{
 			ULONG32 value;
 			memcpy(&value, addr, sizeof(ULONG32));
@@ -288,7 +279,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	int exit_code = EXIT_FAILURE, arg_offset = 1;
 	SIZE_T target_memory = 0U, allocated_memory = 0U, page_size = 0U;
 	SIZE_T chunk_size, working_set_size, pass, completed_last, chunk_idx, thread_idx;
-	BOOL batch_mode = FALSE, continuous_mode = FALSE;
+	BOOL batch_mode = FALSE, continuous_mode = FALSE, percent_mode = FALSE;
 	meminfo_t phys_memory;
 	HANDLE thread[MAX_THREAD];
 
@@ -297,18 +288,22 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 	SetConsoleTitleW(L"Memory Checker");
 
+	/* ----------------------------------------------------- */
+	/* Parse parameters                                      */
+	/* ----------------------------------------------------- */
+
 	while (arg_offset < argc)
 	{
 		if ((!_wcsicmp(argv[arg_offset], L"-h")) || (!_wcsicmp(argv[arg_offset], L"/?")) || (!_wcsicmp(argv[arg_offset], L"-?")) || (!_wcsicmp(argv[arg_offset], L"--help")))
 		{
 			fputs("Usage:\n", stderr);
-			fputs("  MemoryChecker.exe [--batch] [--continuous] [<memory_size>] [<threads>]\n\n", stderr);
+			fputs("  MemoryChecker.exe [--batch] [--continuous] [<target_memory_size>[%]] [<threads>]\n\n", stderr);
 			fputs("Default memory size to test is ~95% of the total physical memory.\n\n", stderr);
 			return EXIT_SUCCESS;
 		}
 		if ((argv[arg_offset][0U] == L'-') && (argv[arg_offset][1U] == L'-'))
 		{
-			const wchar_t *const option = argv[arg_offset++] + 2U;
+			const wchar_t* const option = argv[arg_offset++] + 2U;
 			if (option[0U] != L'\0')
 			{
 				if (!_wcsicmp(option, L"batch"))
@@ -333,24 +328,39 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	if (arg_offset < argc)
 	{
 		const wchar_t *const value = argv[arg_offset++];
-		target_memory = wcstoull(value, NULL, 10);
-		if (!target_memory)
+		wchar_t *end_ptr = NULL;
+		target_memory = wcstoull(value, &end_ptr, 10);
+		if ((!target_memory) || (end_ptr && (*end_ptr != L'%') && (*end_ptr != L'\0')))
 		{
-			fprintf(stderr, "The specified memory size is invalid: \"%S\"\n\n", value);
+			fprintf(stderr, "The specified target memory size is invalid: \"%S\"\n\n", value);
 			return EXIT_FAILURE;
+		}
+		if (end_ptr && (*end_ptr == L'%'))
+		{
+			percent_mode = TRUE;
+			if (target_memory > 100U)
+			{
+				fputs("Error: Cannot allocated more than 100% of the total physical memory!\n\n", stderr);
+				return EXIT_FAILURE;
+			}
 		}
 	}
 
 	if (arg_offset < argc)
 	{
-		const wchar_t *const value = argv[arg_offset++];
-		num_threads = wcstoull(value, NULL, 10);
-		if (!num_threads)
+		const wchar_t* const value = argv[arg_offset++];
+		wchar_t* end_ptr = NULL;
+		num_threads = wcstoull(value, &end_ptr, 10);
+		if ((!num_threads) || (end_ptr && (*end_ptr != L'\0')))
 		{
 			fprintf(stderr, "The specified thread count is invalid: \"%S\"\n\n", value);
 			return EXIT_FAILURE;
 		}
 	}
+
+	/* ----------------------------------------------------- */
+	/* Get system properties                                 */
+	/* ----------------------------------------------------- */
 
 	if (!(page_size = get_page_size()))
 	{
@@ -358,7 +368,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		goto cleanup;
 	}
 
-	if (page_size % sizeof(ULONG64) != 0)
+	if (page_size % sizeof(ULONG32) != 0)
 	{
 		fputs("System error: Page size is *not* a multiple of 4 bytes!\n\n", stderr);
 		goto cleanup;
@@ -374,15 +384,16 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	fprintf(stderr, "Total physical memory : %012llu (0x%010llX)\n", phys_memory.total, phys_memory.total);
 	fprintf(stderr, "Avail physical memory : %012llu (0x%010llX)\n", phys_memory.avail, phys_memory.avail);
 
-	if (phys_memory.total < MIN_MEMORY)
+	if (phys_memory.total <= MIN_MEMORY)
 	{
 		fputs("\nError: Sorry, not enough physical memory!\n\n", stderr);
 		goto cleanup;
 	}
 
-	if (!target_memory)
+	if ((!target_memory) || percent_mode)
 	{
-		target_memory = (UINT64)round(phys_memory.total * 0.95);
+		const double fraction = percent_mode ? (bound(1U, target_memory, 100U) / 100.0) : 0.95;
+		target_memory = (SIZE_T) round(phys_memory.total * fraction);
 	}
 	else
 	{
@@ -398,17 +409,24 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 	if (!num_threads)
 	{
-		num_threads = get_cpu_count();
+		num_threads = bound(1U, get_cpu_count(), MAX_THREAD);
+	}
+	else
+	{
+		if (num_threads > MAX_THREAD)
+		{
+			fputs("Error: Specified number of threads exceeds allowable maximum!\n\n", stderr);
+			goto cleanup;
+		}
 	}
 
-	num_threads = bound(1U, num_threads, MAX_THREAD);
 	fprintf(stderr, "Threads count : %llu\n\n", num_threads);
 
 	/* ----------------------------------------------------- */
 	/* Allocated memory                                      */
 	/* ----------------------------------------------------- */
 
-	working_set_size = round_up(target_memory + get_max(204800U, get_min_working_set_size()), page_size);
+	working_set_size = target_memory + ((IsWindowsVistaOrGreater() ? 128U : 4096U) * page_size);
 	if (!SetProcessWorkingSetSize(GetCurrentProcess(), working_set_size, working_set_size))
 	{
 		fputs("WARNING: Failed to set working set size. Memory allocation is probably going to fail!\n\n", stderr);
@@ -451,7 +469,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 				Sleep(1U);
 			}
 		}
-		chunk_size = (chunk_size > page_size) ? round_up(chunk_size / 2U, page_size) : (page_size / 2U);
+		chunk_size = (chunk_size > page_size) ? round_up(chunk_size / 2U, page_size) : 0U;
 	}
 
 	if (stop)
@@ -469,6 +487,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	if (allocated_memory < target_memory)
 	{
 		fputs("Error: Failed to allocate the requested amount of physical memory!\n\n", stderr);
+		fputs("NOTE: Please free up more physical memory or try again with a smaller target memory size.\n\n", stderr);
 		goto cleanup;
 	}
 

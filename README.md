@@ -28,10 +28,9 @@ Synopsis
 
 The *Memory Checker* program is invoked as follows:
 
-    MemoryChecker.exe [OPTIONS] [<memory_size>] [<threads>]
+    MemoryChecker.exe [OPTIONS] [<target_memory_size>[%]] [<threads>]
 
 **Note:** Its is *highly* recommended to close all other programs running on your machine before the Memory Checker tool is invoked!
-
 
 Options
 -------
@@ -43,6 +42,11 @@ The following command-line options are available:
 
 - **`--continuous`**:  
   Keep the test running until either an error is detected or the test is interrupted *manually* by the user.
+
+Exit Code
+---------
+
+Returns exit code **`0`** if and only if the test has completed without any errors. If a memory error (or other error) was detected, the exit code **`1`** is returned.
 
 
 Algorithm
@@ -69,6 +73,12 @@ The operating system *reserves* a certain fraction of the physical memory for it
 Also, the Memory Checker does **not** allocate as much memory as possible; a certain proportion of the memory is spared, so that the system remains responsive.
 
 This means that even though the Memory Checker *can* reveal a large number of memory problems, there is **no** hard guarantee that it will detect *any* possible problem!
+
+
+Supported Platforms
+===================
+
+Memory Checker runs on any **64-Bit** version of Microsoft Windows, from *Windows XP Professional x64 Edition* (Service Pack 2) up to and including *Windows 11*.
 
 
 License
