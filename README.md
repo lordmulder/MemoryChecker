@@ -41,7 +41,10 @@ The following command-line options are available:
   Exit the program immediately (i.e. do **not** wait for key press) when the test has completed or failed.
 
 - **`--continuous`**:  
-  Keep the test running until either an error is detected or the test is interrupted *manually* by the user.
+  Keep the test running until either an error is detected or the test is interrupted *manually*.
+
+- **`--debug`**:  
+  Enable additional diagnostic output. You can use a tool like [DbgView](https://docs.microsoft.com/en-us/sysinternals/downloads/debugview) to retrieve the debug output.
 
 Exit Code
 ---------

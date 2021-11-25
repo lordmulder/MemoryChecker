@@ -56,7 +56,7 @@ static SIZE_T num_chunks = 0U, num_threads = 0U;
 static volatile SIZE_T completed = 0U;
 static volatile SIZE_T chk_error = 0U;
 
-static volatile BOOL stop = FALSE;
+static volatile BOOL debug_mode = FALSE, stop = FALSE;
 
 /* ====================================================================== */
 /* Utility Functions                                                      */
@@ -120,6 +120,23 @@ static void set_console_progress(const SIZE_T pass, const SIZE_T total, const do
 	SetConsoleTitleW(buffer);
 }
 
+static void print_chunk(const SIZE_T index, const SIZE_T size, const PVOID* const addr)
+{
+	char buffer[64U];
+	_snprintf_s(buffer, 64U, _TRUNCATE, "[Memchkr] Memory: %04llX - %09llu - 0x%016llX\n", index, size, (ULONG_PTR)addr);
+	OutputDebugStringA(buffer);
+}
+
+static void print_digest(const SIZE_T index, const BYTE* const digest, const BOOL read_mode)
+{
+	char buffer[64U];
+	_snprintf_s(buffer, 64U, _TRUNCATE, "[Memchkr] Digest: %04llX - %s:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\n",
+		index, read_mode ? "RD" : "WR",
+		digest[0U], digest[1U], digest[ 2U], digest[ 3U], digest[ 4U], digest[ 5U], digest[ 6U], digest[ 7U],
+		digest[8U], digest[9U], digest[10U], digest[11U], digest[12U], digest[13U], digest[14U], digest[15U]);
+	OutputDebugStringA(buffer);
+}
+
 static inline SIZE_T get_max(const SIZE_T a, const SIZE_T b)
 {
 	return (a > b) ? a : b;
@@ -169,6 +186,7 @@ static DWORD thread_fill(void *const arg)
 	md5_context_t md5_ctx;
 	rand_state_t rand_state;
 	SIZE_T chunk_idx;
+	const BYTE* digest;
 	const SIZE_T id = (SIZE_T)arg;
 
 	random_init(&rand_state);
@@ -183,7 +201,11 @@ static DWORD thread_fill(void *const arg)
 			memcpy(addr, &value, sizeof(ULONG32));
 			md5_update(&md5_ctx, (const BYTE*)&value, sizeof(ULONG32));
 		}
-		memcpy(DIGEST[chunk_idx], md5_finalize(&md5_ctx), sizeof(md5_digest_t));
+		memcpy(DIGEST[chunk_idx], digest = md5_finalize(&md5_ctx), sizeof(md5_digest_t));
+		if (debug_mode)
+		{
+			print_digest(chunk_idx, digest, FALSE);
+		}
 		InterlockedAdd64(&completed, CHUNKS[chunk_idx].size);
 	}
 
@@ -194,6 +216,7 @@ static DWORD thread_check(void *const arg)
 {
 	md5_context_t md5_ctx;
 	SIZE_T chunk_idx;
+	const BYTE *digest;
 	ULONG32 temp;
 	const SIZE_T id = (SIZE_T)arg;
 
@@ -206,9 +229,13 @@ static DWORD thread_check(void *const arg)
 			memcpy(&temp, addr, sizeof(ULONG32));
 			md5_update(&md5_ctx, (const BYTE*)&temp, sizeof(ULONG32));
 		}
-		if (memcmp(md5_finalize(&md5_ctx), DIGEST[chunk_idx], sizeof(md5_digest_t)) != 0)
+		if (memcmp(digest = md5_finalize(&md5_ctx), DIGEST[chunk_idx], sizeof(md5_digest_t)) != 0)
 		{
 			InterlockedIncrement64(&chk_error);
+		}
+		if (debug_mode)
+		{
+			print_digest(chunk_idx, digest, TRUE);
 		}
 		InterlockedAdd64(&completed, CHUNKS[chunk_idx].size);
 	}
@@ -224,7 +251,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 {
 	int exit_code = EXIT_FAILURE, arg_offset = 1;
 	SIZE_T target_memory = 0U, allocated_memory = 0U, page_size = 0U;
-	SIZE_T chunk_size, working_set_size, pass, completed_last, chunk_idx, thread_idx;
+	SIZE_T chunk_size = 0U, working_set_size = 0U, pass = 0U, completed_last = 0U, chunk_idx = 0U, thread_idx = 0U;
 	BOOL batch_mode = FALSE, continuous_mode = FALSE, percent_mode = FALSE;
 	meminfo_t phys_memory;
 	HANDLE thread[MAX_THREAD];
@@ -255,17 +282,20 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 				if (!_wcsicmp(option, L"batch"))
 				{
 					batch_mode = TRUE;
+					continue;
 				}
-				else if (!_wcsicmp(option, L"continuous"))
+				if (!_wcsicmp(option, L"continuous"))
 				{
 					continuous_mode = TRUE;
+					continue;
 				}
-				else
+				if (!_wcsicmp(option, L"debug"))
 				{
-					fprintf(stderr, "The specified option is unknown: \"--%S\"\n\n", option);
-					return EXIT_FAILURE;
+					debug_mode = TRUE;
+					continue;
 				}
-				continue;
+				fprintf(stderr, "The specified option is unknown: \"--%S\"\n\n", option);
+				return EXIT_FAILURE;
 			}
 		}
 		break; /*no more options*/
@@ -405,6 +435,10 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 				fprintf(stderr, "\r%.1f%%", progress);
 				fflush(stderr);
 				set_console_progress(0, continuous_mode ? 0U : NUM_PASSES, progress);
+				if (debug_mode)
+				{
+					print_chunk(num_chunks - 1U, chunk_size, addr);
+				}
 			}
 			else
 			{
