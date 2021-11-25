@@ -194,6 +194,7 @@ static DWORD thread_check(void *const arg)
 {
 	md5_context_t md5_ctx;
 	SIZE_T chunk_idx;
+	ULONG32 temp;
 	const SIZE_T id = (SIZE_T)arg;
 
 	for (chunk_idx = id; (!stop) && (chunk_idx < num_chunks); chunk_idx += num_threads)
@@ -202,9 +203,8 @@ static DWORD thread_check(void *const arg)
 		md5_init(&md5_ctx);
 		for (BYTE *addr = CHUNKS[chunk_idx].addr; addr < limit; addr += sizeof(ULONG32))
 		{
-			ULONG32 value;
-			memcpy(&value, addr, sizeof(ULONG32));
-			md5_update(&md5_ctx, (const BYTE*)&value, sizeof(ULONG32));
+			memcpy(&temp, addr, sizeof(ULONG32));
+			md5_update(&md5_ctx, (const BYTE*)&temp, sizeof(ULONG32));
 		}
 		if (memcmp(md5_finalize(&md5_ctx), DIGEST[chunk_idx], sizeof(md5_digest_t)) != 0)
 		{
