@@ -7,7 +7,6 @@
 #error This program should be compiled as x64 binary!
 #endif
 
-#define _CRT_RAND_S
 #define WIN32_LEAN_AND_MEAN 1
 
 #include <Windows.h>
@@ -15,7 +14,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <process.h>
-#include "crc64table.h"
+#include "random.h"
+#include "md5.h"
 #include "version.h"
 
 #define MAX_CHUNKS 4096U
@@ -37,20 +37,6 @@ meminfo_t;
 
 typedef struct
 {
-	ULONG32 x, y, z, w, v, d;
-}
-rand_state_t;
-
-typedef struct
-{
-	BYTE buffer[sizeof(ULONG32)];
-	SIZE_T offset;
-	rand_state_t random;
-}
-byte_state_t;
-
-typedef struct
-{
 	SIZE_T size;
 	BYTE *addr;
 }
@@ -63,12 +49,12 @@ chunk_t;
 static const char* const BUILD_DATE = __DATE__;
 
 static chunk_t CHUNKS[MAX_CHUNKS];
-static ULONG64 CRC[MAX_CHUNKS];
+static md5_digest_t DIGEST[MAX_CHUNKS];
 
 static SIZE_T num_chunks = 0U, num_threads = 0U;
 
 static volatile SIZE_T completed = 0U;
-static volatile SIZE_T crc_error = 0U;
+static volatile SIZE_T chk_error = 0U;
 
 static volatile BOOL stop = FALSE;
 
@@ -134,48 +120,6 @@ static void set_console_progress(const SIZE_T pass, const SIZE_T total, const do
 	SetConsoleTitleW(buffer);
 }
 
-static void random_init(rand_state_t *const state)
-{
-	SecureZeroMemory(state, sizeof(rand_state_t));
-	rand_s(&state->x);
-	rand_s(&state->y);
-	rand_s(&state->z);
-	rand_s(&state->w);
-	rand_s(&state->v);
-	rand_s(&state->d);
-}
-
-static inline ULONG32 random_next(rand_state_t *const state)
-{
-	const ULONG32 t = state->x ^ (state->x >> 2);
-	state->x = state->y;
-	state->y = state->z;
-	state->z = state->w;
-	state->w = state->v;
-	state->v ^= (state->v << 4) ^ t ^ (t << 1);
-	return (state->d += 0x000587C5) + state->v;
-}
-
-static inline BYTE next_byte(byte_state_t *const state)
-{
-	if (state->offset >= sizeof(ULONG32))
-	{
-		*((ULONG32*)&state->buffer) = random_next(&state->random);
-		state->offset = 0U;
-	}
-	return state->buffer[state->offset++];
-}
-
-static inline void crc_update(ULONG64 *const crc, const ULONG32 value)
-{
-	const BYTE *p = (const BYTE*)&value;
-	for (SIZE_T i = 0U; i < sizeof(ULONG32); ++i)
-	{
-		const SIZE_T t = (((*crc) >> 56) ^ (*p++)) & 0xFF;
-		*crc = CRC64_TABLE[t] ^ ((*crc) << 8);
-	}
-}
-
 static inline SIZE_T get_max(const SIZE_T a, const SIZE_T b)
 {
 	return (a > b) ? a : b;
@@ -222,6 +166,7 @@ static BOOL WINAPI console_ctrl_handler(const DWORD ctrl_type)
 
 static DWORD thread_fill(void *const arg)
 {
+	md5_context_t md5_ctx;
 	rand_state_t rand_state;
 	SIZE_T chunk_idx;
 	const SIZE_T id = (SIZE_T)arg;
@@ -230,15 +175,15 @@ static DWORD thread_fill(void *const arg)
 
 	for (chunk_idx = id; (!stop) && (chunk_idx < num_chunks); chunk_idx += num_threads)
 	{
-		ULONG64 *const crc = &CRC[chunk_idx];
-		*crc = (ULONG64)~0;
 		BYTE *const limit = CHUNKS[chunk_idx].addr + CHUNKS[chunk_idx].size;
+		md5_init(&md5_ctx);
 		for (BYTE *addr = CHUNKS[chunk_idx].addr; addr < limit; addr += sizeof(ULONG32))
 		{
 			const ULONG32 value = random_next(&rand_state);
-			crc_update(crc, value);
 			memcpy(addr, &value, sizeof(ULONG32));
+			md5_update(&md5_ctx, (const BYTE*)&value, sizeof(ULONG32));
 		}
+		memcpy(DIGEST[chunk_idx], md5_finalize(&md5_ctx), sizeof(md5_digest_t));
 		InterlockedAdd64(&completed, CHUNKS[chunk_idx].size);
 	}
 
@@ -247,22 +192,23 @@ static DWORD thread_fill(void *const arg)
 
 static DWORD thread_check(void *const arg)
 {
+	md5_context_t md5_ctx;
 	SIZE_T chunk_idx;
 	const SIZE_T id = (SIZE_T)arg;
 
 	for (chunk_idx = id; (!stop) && (chunk_idx < num_chunks); chunk_idx += num_threads)
 	{
-		ULONG64 crc = (ULONG64)~0;
 		BYTE *const limit = CHUNKS[chunk_idx].addr + CHUNKS[chunk_idx].size;
+		md5_init(&md5_ctx);
 		for (BYTE *addr = CHUNKS[chunk_idx].addr; addr < limit; addr += sizeof(ULONG32))
 		{
 			ULONG32 value;
 			memcpy(&value, addr, sizeof(ULONG32));
-			crc_update(&crc, value);
+			md5_update(&md5_ctx, (const BYTE*)&value, sizeof(ULONG32));
 		}
-		if (crc != CRC[chunk_idx])
+		if (memcmp(md5_finalize(&md5_ctx), DIGEST[chunk_idx], sizeof(md5_digest_t)) != 0)
 		{
-			InterlockedIncrement64(&crc_error);
+			InterlockedIncrement64(&chk_error);
 		}
 		InterlockedAdd64(&completed, CHUNKS[chunk_idx].size);
 	}
@@ -633,10 +579,10 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			CloseHandle(thread[thread_idx]);
 		}
 
-		if (crc_error != 0U)
+		if (chk_error != 0U)
 		{
 			fputs("\rFailed!\n\n", stderr);
-			fprintf(stderr, "Error: %llu CRC check(s) have failed. Memory corruption :-(\n\n", crc_error);
+			fprintf(stderr, "Error: %llu hash check(s) have failed. Memory corruption :-(\n\n", chk_error);
 			goto cleanup;
 		}
 
