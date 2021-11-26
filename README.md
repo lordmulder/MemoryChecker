@@ -6,7 +6,7 @@ title: Memory Checker
 Introduction
 ============
 
-**Memory Checker** is a simple memory stress-testing tool. It is useful to test the reliability of your computer's main memory (RAM) und “high” load.
+**Memory Checker** is a simple memory stress-testing tool. It is useful to test the reliability of your computer's main memory (RAM) under “high” load.
 
 Because the *Memory Checker* runs as a “normal” Windows application, it is very easy to use. There are some [limitations](#limitations) though.
 
@@ -30,7 +30,11 @@ The *Memory Checker* program is invoked as follows:
 
     MemoryChecker.exe [OPTIONS] [<target_memory_size>[%]] [<threads>]
 
-**Note:** Its is *highly* recommended to close all other programs running on your machine before the Memory Checker tool is invoked!
+Specifying the amount of memory to be tested and the number of threads to be used is *optional*. If **not** specified explicitly, default values apply.
+
+The amount of memory to be tested can be specified as a *percentage* of the total physical memory.
+
+***Note:*** Its is *highly* recommended to close all other programs that are running on your machine before the Memory Checker tool is launched !!!
 
 Options
 -------
@@ -46,6 +50,9 @@ The following command-line options are available:
 - **`--debug`**:  
   Enable additional diagnostic output. You can use a tool like [DbgView](https://docs.microsoft.com/en-us/sysinternals/downloads/debugview) to retrieve the debug output.
 
+- **`--monochrome`**:  
+  Disable colored console output. It is implicitly disabled when redirecting to a file or pipe.
+
 Exit Code
 ---------
 
@@ -55,7 +62,7 @@ Returns exit code **`0`** if and only if the test has completed without any erro
 Algorithm
 =========
 
-First of all, the *Memory Checker* allocates the specified amount of memory to be tested. By default, *95%* of the computer's total physical memory will be tested.
+First of all, the *Memory Checker* allocates the specified amount of memory to be tested. By default, *92%* of the computer's total physical memory will be tested.
 
 All allocated memory pages are “locked” (pinned) in the physical memory, so that they can **not** swapped out to the disk during the test.
 
