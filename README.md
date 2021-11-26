@@ -10,6 +10,8 @@ Introduction
 
 Because the *Memory Checker* runs as a “normal” Windows application, it is very easy to use. There are some [limitations](#limitations) though.
 
+![](etc/img/memchckr.png)
+
 
 Disclaimer
 ==========
