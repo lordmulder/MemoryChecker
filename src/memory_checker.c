@@ -22,7 +22,7 @@
 
 #define MAX_CHUNKS 4096U
 #define MAX_THREAD   32U
-#define NUM_PASSES    5U
+#define NUM_PASSES    8U
 
 #define MIN_MEMORY (512U * 1024U * 1024U)
 
@@ -66,8 +66,8 @@ static md5_digest_t DIGEST[MAX_CHUNKS];
 
 static SIZE_T num_chunks = 0U, num_threads = 0U;
 
-static volatile SIZE_T completed = 0U;
-static volatile SIZE_T chk_error = 0U;
+static volatile LONG64 completed = 0LL;
+static volatile LONG64 chk_error = 0LL;
 
 static volatile BOOL debug_mode = FALSE, color_mode = TRUE, stop = FALSE;
 
@@ -124,11 +124,11 @@ static void set_console_progress(const SIZE_T pass, const SIZE_T total, const do
 	wchar_t buffer[64U];
 	if (total > 0U)
 	{
-		_snwprintf_s(buffer, 64U, _TRUNCATE, L"[%llu/%llu] %.1f%% - Memory Checker", pass, total, progress);
+		_snwprintf_s(buffer, 64U, _TRUNCATE, L"[%zu/%zu] %.1f%% - Memory Checker", pass, total, progress);
 	}
 	else
 	{
-		_snwprintf_s(buffer, 64U, _TRUNCATE, L"[%llu/\u221E] %.1f%% - Memory Checker", pass, progress);
+		_snwprintf_s(buffer, 64U, _TRUNCATE, L"[%zu/\u221E] %.1f%% - Memory Checker", pass, progress);
 	}
 	SetConsoleTitleW(buffer);
 }
@@ -200,14 +200,14 @@ static BOOL fprint_msg(const msgtype_t type, const char* const format, ...)
 static void print_chunk(const SIZE_T index, const SIZE_T size, const PVOID* const addr)
 {
 	char buffer[64U];
-	_snprintf_s(buffer, 64U, _TRUNCATE, "[Memchkr] Memory: %04llX - %09llu - 0x%016llX\n", index, size, (ULONG_PTR)addr);
+	_snprintf_s(buffer, 64U, _TRUNCATE, "[Memchkr] Memory: %04zX - %09zu - 0x%016zX\n", index, size, (ULONG_PTR)addr);
 	OutputDebugStringA(buffer);
 }
 
 static void print_digest(const SIZE_T index, const BYTE* const digest, const BOOL read_mode)
 {
 	char buffer[64U];
-	_snprintf_s(buffer, 64U, _TRUNCATE, "[Memchkr] Digest: %04llX - %s:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\n",
+	_snprintf_s(buffer, 64U, _TRUNCATE, "[Memchkr] Digest: %04zX - %s:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\n",
 		index, read_mode ? "RD" : "WR",
 		digest[0U], digest[1U], digest[ 2U], digest[ 3U], digest[ 4U], digest[ 5U], digest[ 6U], digest[ 7U],
 		digest[8U], digest[9U], digest[10U], digest[11U], digest[12U], digest[13U], digest[14U], digest[15U]);
@@ -264,7 +264,7 @@ static void print_app_logo(void)
 /* Thread                                                                 */
 /* ====================================================================== */
 
-static DWORD thread_fill(void *const arg)
+static UINT32 thread_fill(void *const arg)
 {
 	md5_context_t md5_ctx;
 	rand_state_t rand_state;
@@ -278,11 +278,11 @@ static DWORD thread_fill(void *const arg)
 	{
 		BYTE *const limit = CHUNKS[chunk_idx].addr + CHUNKS[chunk_idx].size;
 		md5_init(&md5_ctx);
-		for (BYTE *addr = CHUNKS[chunk_idx].addr; addr < limit; addr += sizeof(ULONG32))
+		for (BYTE *addr = CHUNKS[chunk_idx].addr; addr < limit; addr += sizeof(ULONG64))
 		{
-			const ULONG32 value = random_next(&rand_state);
-			memcpy(addr, &value, sizeof(ULONG32));
-			md5_update(&md5_ctx, (const BYTE*)&value, sizeof(ULONG32));
+			const ULONG64 value = (((ULONG64)random_next(&rand_state)) << 32) | ((ULONG64)random_next(&rand_state));
+			memcpy(addr, &value, sizeof(ULONG64));
+			md5_update(&md5_ctx, (const BYTE*)&value, sizeof(ULONG64));
 		}
 		memcpy(DIGEST[chunk_idx], digest = md5_finalize(&md5_ctx), sizeof(md5_digest_t));
 		if (debug_mode)
@@ -295,22 +295,22 @@ static DWORD thread_fill(void *const arg)
 	return stop ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
-static DWORD thread_check(void *const arg)
+static UINT32 thread_check(void *const arg)
 {
 	md5_context_t md5_ctx;
 	SIZE_T chunk_idx;
 	const BYTE *digest;
-	ULONG32 temp;
+	ULONG64 temp;
 	const SIZE_T id = (SIZE_T)arg;
 
 	for (chunk_idx = id; (!stop) && (chunk_idx < num_chunks); chunk_idx += num_threads)
 	{
 		BYTE *const limit = CHUNKS[chunk_idx].addr + CHUNKS[chunk_idx].size;
 		md5_init(&md5_ctx);
-		for (BYTE *addr = CHUNKS[chunk_idx].addr; addr < limit; addr += sizeof(ULONG32))
+		for (BYTE *addr = CHUNKS[chunk_idx].addr; addr < limit; addr += sizeof(ULONG64))
 		{
-			memcpy(&temp, addr, sizeof(ULONG32));
-			md5_update(&md5_ctx, (const BYTE*)&temp, sizeof(ULONG32));
+			memcpy(&temp, addr, sizeof(ULONG64));
+			md5_update(&md5_ctx, (const BYTE*)&temp, sizeof(ULONG64));
 		}
 		if (memcmp(digest = md5_finalize(&md5_ctx), DIGEST[chunk_idx], sizeof(md5_digest_t)) != 0)
 		{
@@ -334,7 +334,8 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 {
 	int exit_code = EXIT_FAILURE, arg_offset = 1;
 	SIZE_T target_memory = 0U, allocated_memory = 0U, page_size = 0U;
-	SIZE_T chunk_size = 0U, working_set_size = 0U, pass = 0U, completed_last = 0U, chunk_idx = 0U, thread_idx = 0U;
+	SIZE_T chunk_size = 0U, working_set_size = 0U, pass = 0U, chunk_idx = 0U, thread_idx = 0U;
+	LONG64 completed_last = 0LL;
 	BOOL batch_mode = FALSE, continuous_mode = FALSE, percent_mode = FALSE;
 	meminfo_t phys_memory;
 	HANDLE thread[MAX_THREAD];
@@ -433,9 +434,9 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		goto cleanup;
 	}
 
-	if (page_size % sizeof(ULONG32) != 0)
+	if (page_size % sizeof(ULONG64) != 0)
 	{
-		print_msg(MSGTYPE_ERR, "System error: Page size is *not* a multiple of 4 bytes!\n\n");
+		fprint_msg(MSGTYPE_ERR, "System error: Page size is *not* a multiple of %zu bytes!\n\n", sizeof(ULONG64));
 		goto cleanup;
 	}
 
@@ -446,8 +447,8 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		goto cleanup;
 	}
 
-	fprint_msg(MSGTYPE_NFO, "Total physical memory : %012llu (0x%010llX)\n", phys_memory.total, phys_memory.total);
-	fprint_msg(MSGTYPE_NFO, "Avail physical memory : %012llu (0x%010llX)\n", phys_memory.avail, phys_memory.avail);
+	fprint_msg(MSGTYPE_NFO, "Total physical memory : %012zu (0x%010zX)\n", phys_memory.total, phys_memory.total);
+	fprint_msg(MSGTYPE_NFO, "Avail physical memory : %012zu (0x%010zX)\n", phys_memory.avail, phys_memory.avail);
 
 	if (phys_memory.total <= MIN_MEMORY)
 	{
@@ -470,7 +471,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	}
 
 	target_memory = round_up(target_memory, page_size);
-	fprint_msg(MSGTYPE_NFO, "Check physical memory : %012llu (0x%010llX)\n\n", target_memory, target_memory);
+	fprint_msg(MSGTYPE_NFO, "Check physical memory : %012zu (0x%010zX)\n\n", target_memory, target_memory);
 
 	if (!num_threads)
 	{
@@ -485,7 +486,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		}
 	}
 
-	fprint_msg(MSGTYPE_NFO, "Threads count : %llu\n\n", num_threads);
+	fprint_msg(MSGTYPE_NFO, "Threads count : %zu\n\n", num_threads);
 
 	/* ----------------------------------------------------- */
 	/* Allocated memory                                      */
@@ -548,7 +549,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	fprint_msg(MSGTYPE_FIN, "\r%.1f%% [OK]\n\n", 100.0 * ((double)allocated_memory / target_memory));
 	set_console_progress(0, continuous_mode ? 0U : NUM_PASSES, 100.0);
 
-	fprint_msg(MSGTYPE_NFO, "Allocated memory : %012llu (0x%010llX)\n\n", allocated_memory, allocated_memory);
+	fprint_msg(MSGTYPE_NFO, "Allocated memory : %012zu (0x%010zX)\n\n", allocated_memory, allocated_memory);
 
 	if (allocated_memory < target_memory)
 	{
@@ -565,11 +566,11 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	{
 		if (!continuous_mode)
 		{
-			fprint_msg(MSGTYPE_HDR, "--- [ Pass %llu of %llu ] ---\n\n", pass + 1U, (SIZE_T)NUM_PASSES);
+			fprint_msg(MSGTYPE_HDR, "--- [ Pass %zu of %zu ] ---\n\n", pass + 1U, (SIZE_T)NUM_PASSES);
 		}
 		else
 		{
-			fprint_msg(MSGTYPE_HDR, "--- [ Testing pass %llu ] ---\n\n", pass + 1U);
+			fprint_msg(MSGTYPE_HDR, "--- [ Testing pass %zu ] ---\n\n", pass + 1U);
 		}
 
 		/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
@@ -580,7 +581,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		print_msg(MSGTYPE_PRG, "0.0%");
 		set_console_progress(pass + 1U, continuous_mode ? 0U : NUM_PASSES, 0.0);
 
-		completed = completed_last = 0U;
+		completed = completed_last = 0LL;
 
 		for (thread_idx = 0U; thread_idx < num_threads; ++thread_idx)
 		{
@@ -602,7 +603,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			}
 			else if (result == WAIT_TIMEOUT)
 			{
-				const SIZE_T completed_current = completed;
+				const LONG64 completed_current = completed;
 				if (completed_current != completed_last)
 				{
 					const double progress = 100.0 * ((double)completed_current / allocated_memory);
@@ -644,7 +645,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		print_msg(MSGTYPE_PRG, "0.0%");
 		set_console_progress(pass + 1U, continuous_mode ? 0U : NUM_PASSES, 50.0);
 
-		completed = completed_last = 0U;
+		completed = completed_last = 0LL;
 
 		for (thread_idx = 0U; thread_idx < num_threads; ++thread_idx)
 		{
@@ -666,7 +667,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			}
 			else if (result == WAIT_TIMEOUT)
 			{
-				const SIZE_T completed_current = completed;
+				const LONG64 completed_current = completed;
 				if (completed_current != completed_last)
 				{
 					const double progress = 100.0 * ((double)completed_current / allocated_memory);
@@ -692,10 +693,10 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			CloseHandle(thread[thread_idx]);
 		}
 
-		if (chk_error != 0U)
+		if (chk_error != 0LL)
 		{
 			print_msg(MSGTYPE_WRN, "\rFailed!\n\n");
-			fprint_msg(MSGTYPE_NFO, "Error: %llu hash check(s) have failed. Memory corruption :-(\n\n", chk_error);
+			fprint_msg(MSGTYPE_NFO, "Error: %ll hash check(s) have failed. Memory corruption :-(\n\n", chk_error);
 			goto cleanup;
 		}
 
@@ -752,7 +753,7 @@ int wmain(const int argc, const wchar_t *const argv[])
 	__except(1)
 	{
 		const DWORD ex_code = GetExceptionCode();
-		fprintf(stderr, "\n\nEXCEPTION: Something went seriously wrong! (Exception code: %u)\n\n", ex_code);
+		fprintf(stderr, "\n\nEXCEPTION: Something went seriously wrong! (Exception code: %lu)\n\n", ex_code);
 		fflush(stderr);
 	}
 }
