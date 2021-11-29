@@ -55,6 +55,8 @@ typedef enum
 }
 msgtype_t;
 
+typedef BYTE digest_t[MD5_HASH_SIZE];
+
 /* ====================================================================== */
 /* Globals                                                                */
 /* ====================================================================== */
@@ -62,7 +64,7 @@ msgtype_t;
 static const char* const BUILD_DATE = __DATE__;
 
 static chunk_t CHUNKS[MAX_CHUNKS];
-static md5_digest_t DIGEST[MAX_CHUNKS];
+static digest_t DIGEST[MAX_CHUNKS];
 
 static SIZE_T num_chunks = 0U, num_threads = 0U;
 
@@ -197,14 +199,14 @@ static BOOL fprint_msg(const msgtype_t type, const char* const format, ...)
 	return print_msg(type, buffer);
 }
 
-static void print_chunk(const SIZE_T index, const SIZE_T size, const PVOID* const addr)
+static void DBG_print_chunk(const SIZE_T index, const SIZE_T size, const PVOID* const addr)
 {
 	char buffer[64U];
 	_snprintf_s(buffer, 64U, _TRUNCATE, "[Memchkr] Memory: %04zX - %09zu - 0x%016zX\n", index, size, (ULONG_PTR)addr);
 	OutputDebugStringA(buffer);
 }
 
-static void print_digest(const SIZE_T index, const BYTE* const digest, const BOOL read_mode)
+static void DBG_print_digest(const SIZE_T index, const BYTE* const digest, const BOOL read_mode)
 {
 	char buffer[64U];
 	_snprintf_s(buffer, 64U, _TRUNCATE, "[Memchkr] Digest: %04zX - %s:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\n",
@@ -266,10 +268,9 @@ static void print_app_logo(void)
 
 static UINT32 thread_fill(void *const arg)
 {
-	md5_context_t md5_ctx;
+	md5_ctx_t md5_ctx;
 	rand_state_t rand_state;
 	SIZE_T chunk_idx;
-	const BYTE* digest;
 	const SIZE_T id = (SIZE_T)arg;
 
 	random_init(&rand_state);
@@ -284,10 +285,10 @@ static UINT32 thread_fill(void *const arg)
 			memcpy(addr, &value, sizeof(ULONG64));
 			md5_update(&md5_ctx, (const BYTE*)&value, sizeof(ULONG64));
 		}
-		memcpy(DIGEST[chunk_idx], digest = md5_finalize(&md5_ctx), sizeof(md5_digest_t));
+		md5_final(&md5_ctx, DIGEST[chunk_idx]);
 		if (debug_mode)
 		{
-			print_digest(chunk_idx, digest, FALSE);
+			DBG_print_digest(chunk_idx, DIGEST[chunk_idx], FALSE);
 		}
 		InterlockedAdd64(&completed, CHUNKS[chunk_idx].size);
 	}
@@ -297,9 +298,9 @@ static UINT32 thread_fill(void *const arg)
 
 static UINT32 thread_check(void *const arg)
 {
-	md5_context_t md5_ctx;
+	md5_ctx_t md5_ctx;
 	SIZE_T chunk_idx;
-	const BYTE *digest;
+	BYTE digest[MD5_HASH_SIZE];
 	ULONG64 temp;
 	const SIZE_T id = (SIZE_T)arg;
 
@@ -312,13 +313,14 @@ static UINT32 thread_check(void *const arg)
 			memcpy(&temp, addr, sizeof(ULONG64));
 			md5_update(&md5_ctx, (const BYTE*)&temp, sizeof(ULONG64));
 		}
-		if (memcmp(digest = md5_finalize(&md5_ctx), DIGEST[chunk_idx], sizeof(md5_digest_t)) != 0)
-		{
-			InterlockedIncrement64(&chk_error);
-		}
+		md5_final(&md5_ctx, digest);
 		if (debug_mode)
 		{
-			print_digest(chunk_idx, digest, TRUE);
+			DBG_print_digest(chunk_idx, digest, TRUE);
+		}
+		if (memcmp(digest, DIGEST[chunk_idx], MD5_HASH_SIZE) != 0)
+		{
+			InterlockedIncrement64(&chk_error);
 		}
 		InterlockedAdd64(&completed, CHUNKS[chunk_idx].size);
 	}
@@ -428,6 +430,12 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	/* Get system properties                                 */
 	/* ----------------------------------------------------- */
 
+	if (!random_setup())
+	{
+		print_msg(MSGTYPE_ERR, "System error: Failed to initialize RtlGenRandom() function!\n\n");
+		goto cleanup;
+	}
+
 	if (!(page_size = get_page_size()))
 	{
 		print_msg(MSGTYPE_ERR, "System error: Failed to determine page size!\n\n");
@@ -525,7 +533,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 				set_console_progress(0, continuous_mode ? 0U : NUM_PASSES, progress);
 				if (debug_mode)
 				{
-					print_chunk(num_chunks - 1U, chunk_size, addr);
+					DBG_print_chunk(num_chunks - 1U, chunk_size, addr);
 				}
 			}
 			else

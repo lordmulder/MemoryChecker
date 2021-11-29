@@ -100,3 +100,9 @@ This work has been released under the **CC0 1.0 Universal** license.
 
 For details, please refer to:  
 <https://creativecommons.org/publicdomain/zero/1.0/legalcode>
+
+Acknowledgements
+----------------
+
+The Memory Checker project includes some code that has been adapted from [RHash](https://github.com/rhash/RHash), by Aleksey Kravchenko.  
+RHash is released under the **BSD Zero Clause License** license.

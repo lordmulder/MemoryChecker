@@ -3,26 +3,27 @@
 /* This work has been released under the CC0 1.0 Universal license!           */
 /******************************************************************************/
 
-#ifndef MD5_H
-#define MD5_H
+#ifndef INC_MD5_H
+#define INC_MD5_H
 
 #ifndef _WINDOWS_
 #error Must include <Windows.h> before including this header!
 #endif
 
-typedef BYTE md5_digest_t[16U];
+#define MD5_BLOCK_SIZE 64U
+#define MD5_HASH_SIZE  16U
 
-typedef struct
+typedef struct _md5_ctx
 {
-	ULONG64 size;
-	ULONG32 buffer[4U];
-	BYTE input[64U];
-	md5_digest_t digest;
+	ULONG32 message[MD5_BLOCK_SIZE / 4U];
+	ULONG64 length;
+	ULONG32 hash[4U];
 }
-md5_context_t;
+md5_ctx_t;
 
-void md5_init(md5_context_t *const ctx);
-void md5_update(md5_context_t *const ctx, const BYTE* const input_buffer, const SIZE_T input_len);
-const BYTE *md5_finalize(md5_context_t *const ctx);
+
+void md5_init(md5_ctx_t *const ctx);
+void md5_update(md5_ctx_t *const ctx, const BYTE *msg, SIZE_T size);
+void md5_final(md5_ctx_t *const ctx, BYTE *const result_out);
 
 #endif

@@ -3,30 +3,31 @@
 /* This work has been released under the CC0 1.0 Universal license!           */
 /******************************************************************************/
 
-#define _CRT_RAND_S 1
 #define WIN32_LEAN_AND_MEAN 1
 
 #include <Windows.h>
 #include <stdlib.h>
 #include "random.h"
 
-static inline void seed(ULONG32* const buffer)
+static BOOLEAN(APIENTRY *ptr_rtlgenrandom)(void*, ULONG) = NULL;
+
+BOOL random_setup(void)
 {
-	if (rand_s(buffer) != 0)
+	const HMODULE advapi32 = GetModuleHandleW(L"advapi32.dll");
+	if (advapi32 != NULL)
 	{
-		abort();
+		ptr_rtlgenrandom = (BOOLEAN(APIENTRY*)(void*, ULONG)) GetProcAddress(advapi32, "SystemFunction036");
+		if (ptr_rtlgenrandom)
+		{
+			return TRUE;
+		}
 	}
+	return FALSE;
 }
 
 void random_init(rand_state_t *const state)
 {
-	SecureZeroMemory(state, sizeof(rand_state_t));
-	seed(&state->x);
-	seed(&state->y);
-	seed(&state->z);
-	seed(&state->w);
-	seed(&state->v);
-	seed(&state->d);
+	ptr_rtlgenrandom(state, sizeof(rand_state_t));
 }
 
 ULONG32 random_next(rand_state_t *const state)

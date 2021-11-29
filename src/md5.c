@@ -1,176 +1,217 @@
-/******************************************************************************/
-/* Memory Checker, by LoRd_MuldeR <MuldeR2@GMX.de>                            */
-/* This work has been released under the CC0 1.0 Universal license!           */
-/******************************************************************************/
+/* md5.c - an implementation of the MD5 algorithm, based on RFC 1321.
+ *
+ * Copyright (c) 2007, Aleksey Kravchenko <rhash.admin@gmail.com>
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+ * REGARD TO THIS SOFTWARE  INCLUDING ALL IMPLIED WARRANTIES OF  MERCHANTABILITY
+ * AND FITNESS.  IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+ * INDIRECT,  OR CONSEQUENTIAL DAMAGES  OR ANY DAMAGES WHATSOEVER RESULTING FROM
+ * LOSS OF USE,  DATA OR PROFITS,  WHETHER IN AN ACTION OF CONTRACT,  NEGLIGENCE
+ * OR OTHER TORTIOUS ACTION,  ARISING OUT OF  OR IN CONNECTION  WITH THE USE  OR
+ * PERFORMANCE OF THIS SOFTWARE.
+ */
+
+#ifndef _M_X64
+#error This program should be compiled as x64 binary!
+#endif
 
 #define WIN32_LEAN_AND_MEAN 1
 #include <Windows.h>
-
 #include "md5.h"
 
-#define A 0x67452301
-#define B 0xefcdab89
-#define C 0x98badcfe
-#define D 0x10325476
+#define LE32_COPY(to, index, from, length) memcpy((BYTE*)(to) + (index), (from), (length))
+#define IS_ALIGNED_32(p) (0U == (3U & (uintptr_t)(p)))
+#define ROTL32(dword, n) ((dword) << (n) ^ ((dword) >> (32U - (n))))
 
-#pragma warning(disable: 6386)
+#define MD5_F(x, y, z) ((((y) ^ (z)) & (x)) ^ (z))
+#define MD5_G(x, y, z) (((x) & (z)) | ((y) & (~z)))
+#define MD5_H(x, y, z) ((x) ^ (y) ^ (z))
+#define MD5_I(x, y, z) ((y) ^ ((x) | (~z)))
 
-static ULONG32 S[] =
-{
-	7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
-	5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20,
-	4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
-	6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21
-};
-
-static ULONG32 K[] =
-{
-	0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee,
-	0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
-	0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be,
-	0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
-	0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa,
-	0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
-	0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed,
-	0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
-	0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c,
-	0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
-	0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05,
-	0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
-	0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039,
-	0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
-	0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1,
-	0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391
-};
-
-#define F(X, Y, Z) ((X & Y) | (~X & Z))
-#define G(X, Y, Z) ((X & Z) | (Y & ~Z))
-#define H(X, Y, Z) (X ^ Y ^ Z)
-#define I(X, Y, Z) (Y ^ (X | ~Z))
-
-static BYTE PADDING[] =
-{
-	0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
-
-static ULONG32 rotate_left(const ULONG32 x, const ULONG32 n)
-{
-	return (x << n) | (x >> (32 - n));
+#define MD5_ROUND1(a, b, c, d, x, s, ac) \
+{ \
+	(a) += MD5_F((b), (c), (d)) + (x) + (ac); \
+	(a) = ROTL32((a), (s)); \
+	(a) += (b); \
 }
 
-static void md5_step(ULONG32 *const buffer, const ULONG32 *const input)
-{
-	ULONG32 AA = buffer[0];
-	ULONG32 BB = buffer[1];
-	ULONG32 CC = buffer[2];
-	ULONG32 DD = buffer[3];
-
-	ULONG32 E;
-	unsigned int j;
-
-	for (unsigned int i = 0; i < 64; ++i) {
-		switch (i / 16) {
-		case 0:
-			E = F(BB, CC, DD);
-			j = i;
-			break;
-		case 1:
-			E = G(BB, CC, DD);
-			j = ((i * 5) + 1) % 16;
-			break;
-		case 2:
-			E = H(BB, CC, DD);
-			j = ((i * 3) + 5) % 16;
-			break;
-		default:
-			E = I(BB, CC, DD);
-			j = (i * 7) % 16;
-			break;
-		}
-
-		ULONG32 temp = DD;
-		DD = CC;
-		CC = BB;
-		BB = BB + rotate_left(AA + E + K[i] + input[j], S[i]);
-		AA = temp;
-	}
-
-	buffer[0] += AA;
-	buffer[1] += BB;
-	buffer[2] += CC;
-	buffer[3] += DD;
+#define MD5_ROUND2(a, b, c, d, x, s, ac) \
+{ \
+	(a) += MD5_G((b), (c), (d)) + (x) + (ac); \
+	(a) = ROTL32((a), (s)); \
+	(a) += (b); \
 }
 
-void md5_init(md5_context_t *const ctx)
-{
-	ctx->size      = (ULONG64)0;
-	ctx->buffer[0] = (ULONG32)A;
-	ctx->buffer[1] = (ULONG32)B;
-	ctx->buffer[2] = (ULONG32)C;
-	ctx->buffer[3] = (ULONG32)D;
+#define MD5_ROUND3(a, b, c, d, x, s, ac) \
+{ \
+	(a) += MD5_H((b), (c), (d)) + (x) + (ac); \
+	(a) = ROTL32((a), (s)); \
+	(a) += (b); \
 }
 
-void md5_update(md5_context_t *const ctx, const BYTE *const input_buffer, const SIZE_T input_len)
-{
-	ULONG32 input[16];
-	unsigned int offset = ctx->size % 64;
-	ctx->size += (ULONG64)input_len;
+#define MD5_ROUND4(a, b, c, d, x, s, ac) \
+ { \
+	(a) += MD5_I((b), (c), (d)) + (x) + (ac); \
+	(a) = ROTL32((a), (s)); \
+	(a) += (b); \
+}
 
-	for (SIZE_T i = 0; i < input_len; ++i)
+static void md5_process_block(ULONG32 state[4U], const ULONG32* const x)
+{
+	register ULONG32 a, b, c, d;
+	a = state[0U];
+	b = state[1U];
+	c = state[2U];
+	d = state[3U];
+
+	MD5_ROUND1(a, b, c, d, x[0], 7, 0xd76aa478);
+	MD5_ROUND1(d, a, b, c, x[1], 12, 0xe8c7b756);
+	MD5_ROUND1(c, d, a, b, x[2], 17, 0x242070db);
+	MD5_ROUND1(b, c, d, a, x[3], 22, 0xc1bdceee);
+	MD5_ROUND1(a, b, c, d, x[4], 7, 0xf57c0faf);
+	MD5_ROUND1(d, a, b, c, x[5], 12, 0x4787c62a);
+	MD5_ROUND1(c, d, a, b, x[6], 17, 0xa8304613);
+	MD5_ROUND1(b, c, d, a, x[7], 22, 0xfd469501);
+	MD5_ROUND1(a, b, c, d, x[8], 7, 0x698098d8);
+	MD5_ROUND1(d, a, b, c, x[9], 12, 0x8b44f7af);
+	MD5_ROUND1(c, d, a, b, x[10], 17, 0xffff5bb1);
+	MD5_ROUND1(b, c, d, a, x[11], 22, 0x895cd7be);
+	MD5_ROUND1(a, b, c, d, x[12], 7, 0x6b901122);
+	MD5_ROUND1(d, a, b, c, x[13], 12, 0xfd987193);
+	MD5_ROUND1(c, d, a, b, x[14], 17, 0xa679438e);
+	MD5_ROUND1(b, c, d, a, x[15], 22, 0x49b40821);
+
+	MD5_ROUND2(a, b, c, d, x[1], 5, 0xf61e2562);
+	MD5_ROUND2(d, a, b, c, x[6], 9, 0xc040b340);
+	MD5_ROUND2(c, d, a, b, x[11], 14, 0x265e5a51);
+	MD5_ROUND2(b, c, d, a, x[0], 20, 0xe9b6c7aa);
+	MD5_ROUND2(a, b, c, d, x[5], 5, 0xd62f105d);
+	MD5_ROUND2(d, a, b, c, x[10], 9, 0x2441453);
+	MD5_ROUND2(c, d, a, b, x[15], 14, 0xd8a1e681);
+	MD5_ROUND2(b, c, d, a, x[4], 20, 0xe7d3fbc8);
+	MD5_ROUND2(a, b, c, d, x[9], 5, 0x21e1cde6);
+	MD5_ROUND2(d, a, b, c, x[14], 9, 0xc33707d6);
+	MD5_ROUND2(c, d, a, b, x[3], 14, 0xf4d50d87);
+	MD5_ROUND2(b, c, d, a, x[8], 20, 0x455a14ed);
+	MD5_ROUND2(a, b, c, d, x[13], 5, 0xa9e3e905);
+	MD5_ROUND2(d, a, b, c, x[2], 9, 0xfcefa3f8);
+	MD5_ROUND2(c, d, a, b, x[7], 14, 0x676f02d9);
+	MD5_ROUND2(b, c, d, a, x[12], 20, 0x8d2a4c8a);
+
+	MD5_ROUND3(a, b, c, d, x[5], 4, 0xfffa3942);
+	MD5_ROUND3(d, a, b, c, x[8], 11, 0x8771f681);
+	MD5_ROUND3(c, d, a, b, x[11], 16, 0x6d9d6122);
+	MD5_ROUND3(b, c, d, a, x[14], 23, 0xfde5380c);
+	MD5_ROUND3(a, b, c, d, x[1], 4, 0xa4beea44);
+	MD5_ROUND3(d, a, b, c, x[4], 11, 0x4bdecfa9);
+	MD5_ROUND3(c, d, a, b, x[7], 16, 0xf6bb4b60);
+	MD5_ROUND3(b, c, d, a, x[10], 23, 0xbebfbc70);
+	MD5_ROUND3(a, b, c, d, x[13], 4, 0x289b7ec6);
+	MD5_ROUND3(d, a, b, c, x[0], 11, 0xeaa127fa);
+	MD5_ROUND3(c, d, a, b, x[3], 16, 0xd4ef3085);
+	MD5_ROUND3(b, c, d, a, x[6], 23, 0x4881d05);
+	MD5_ROUND3(a, b, c, d, x[9], 4, 0xd9d4d039);
+	MD5_ROUND3(d, a, b, c, x[12], 11, 0xe6db99e5);
+	MD5_ROUND3(c, d, a, b, x[15], 16, 0x1fa27cf8);
+	MD5_ROUND3(b, c, d, a, x[2], 23, 0xc4ac5665);
+
+	MD5_ROUND4(a, b, c, d, x[0], 6, 0xf4292244);
+	MD5_ROUND4(d, a, b, c, x[7], 10, 0x432aff97);
+	MD5_ROUND4(c, d, a, b, x[14], 15, 0xab9423a7);
+	MD5_ROUND4(b, c, d, a, x[5], 21, 0xfc93a039);
+	MD5_ROUND4(a, b, c, d, x[12], 6, 0x655b59c3);
+	MD5_ROUND4(d, a, b, c, x[3], 10, 0x8f0ccc92);
+	MD5_ROUND4(c, d, a, b, x[10], 15, 0xffeff47d);
+	MD5_ROUND4(b, c, d, a, x[1], 21, 0x85845dd1);
+	MD5_ROUND4(a, b, c, d, x[8], 6, 0x6fa87e4f);
+	MD5_ROUND4(d, a, b, c, x[15], 10, 0xfe2ce6e0);
+	MD5_ROUND4(c, d, a, b, x[6], 15, 0xa3014314);
+	MD5_ROUND4(b, c, d, a, x[13], 21, 0x4e0811a1);
+	MD5_ROUND4(a, b, c, d, x[4], 6, 0xf7537e82);
+	MD5_ROUND4(d, a, b, c, x[11], 10, 0xbd3af235);
+	MD5_ROUND4(c, d, a, b, x[2], 15, 0x2ad7d2bb);
+	MD5_ROUND4(b, c, d, a, x[9], 21, 0xeb86d391);
+
+	state[0] += a;
+	state[1] += b;
+	state[2] += c;
+	state[3] += d;
+}
+
+void md5_init(md5_ctx_t *const ctx)
+{
+	SecureZeroMemory(ctx, sizeof(md5_ctx_t));
+	ctx->hash[0] = 0x67452301;
+	ctx->hash[1] = 0xefcdab89;
+	ctx->hash[2] = 0x98badcfe;
+	ctx->hash[3] = 0x10325476;
+}
+
+void md5_update(md5_ctx_t *const ctx, const BYTE *msg, SIZE_T size)
+{
+	const ULONG32 index = (ULONG32)ctx->length & 63U;
+	ctx->length += size;
+	if (index)
 	{
-		ctx->input[offset++] = (BYTE)*(input_buffer + i);
-		if (offset % 64 == 0)
+		const ULONG32 left = MD5_BLOCK_SIZE - index;
+		LE32_COPY(ctx->message, index, msg, (size < left ? size : left));
+		if (size < left)
 		{
-			for (unsigned int j = 0; j < 16; ++j)
-			{
-				input[j] =
-					(ULONG32)(ctx->input[(j * 4) + 3]) << 24 |
-					(ULONG32)(ctx->input[(j * 4) + 2]) << 16 |
-					(ULONG32)(ctx->input[(j * 4) + 1]) <<  8 |
-					(ULONG32)(ctx->input[(j * 4)]);
-			}
-			md5_step(ctx->buffer, input);
-			offset = 0;
+			return;
 		}
+		md5_process_block(ctx->hash, ctx->message);
+		msg += left;
+		size -= left;
+	}
+	while (size >= MD5_BLOCK_SIZE)
+	{
+		const ULONG32* aligned_message_block;
+		if (IS_ALIGNED_32(msg))
+		{
+			aligned_message_block = (ULONG32*)msg;
+		}
+		else
+		{
+			LE32_COPY(ctx->message, 0, msg, MD5_BLOCK_SIZE);
+			aligned_message_block = ctx->message;
+		}
+		md5_process_block(ctx->hash, aligned_message_block);
+		msg += MD5_BLOCK_SIZE;
+		size -= MD5_BLOCK_SIZE;
+	}
+	if (size)
+	{
+		LE32_COPY(ctx->message, 0, msg, size);
 	}
 }
 
-const BYTE *md5_finalize(md5_context_t *const ctx)
+void md5_final(md5_ctx_t *const ctx, BYTE *const result_out)
 {
-	ULONG32 input[16];
-	unsigned int offset = ctx->size % 64;
-	unsigned int padding_length = offset < 56 ? 56 - offset : (56 + 64) - offset;
-
-	md5_update(ctx, PADDING, padding_length);
-	ctx->size -= (ULONG64)padding_length;
-
-	for (unsigned int j = 0; j < 14; ++j)
+	ULONG32 index = ((ULONG32)ctx->length & 63U) >> 2;
+	const ULONG32 shift = ((ULONG32)ctx->length & 3U) * 8U;
+	ctx->message[index] &= ~(0xFFFFFFFFU << shift);
+	ctx->message[index++] ^= 0x80U << shift;
+	if (index > 14U)
 	{
-		input[j] =
-			(ULONG32)(ctx->input[(j * 4) + 3]) << 24 |
-			(ULONG32)(ctx->input[(j * 4) + 2]) << 16 |
-			(ULONG32)(ctx->input[(j * 4) + 1]) <<  8 |
-			(ULONG32)(ctx->input[(j * 4)]);
+		while (index < 16U)
+		{
+			ctx->message[index++] = 0U;
+		}
+		md5_process_block(ctx->hash, ctx->message);
+		index = 0;
 	}
-	input[14] = (ULONG32)(ctx->size * 8);
-	input[15] = (ULONG32)((ctx->size * 8) >> 32);
-
-	md5_step(ctx->buffer, input);
-
-	for (unsigned int i = 0; i < 4; ++i)
+	while (index < 14U)
 	{
-		ctx->digest[(i * 4) + 0] = (BYTE)((ctx->buffer[i] & 0x000000FF));
-		ctx->digest[(i * 4) + 1] = (BYTE)((ctx->buffer[i] & 0x0000FF00) >>  8);
-		ctx->digest[(i * 4) + 2] = (BYTE)((ctx->buffer[i] & 0x00FF0000) >> 16);
-		ctx->digest[(i * 4) + 3] = (BYTE)((ctx->buffer[i] & 0xFF000000) >> 24);
+		ctx->message[index++] = 0U;
 	}
-
-	return ctx->digest;
+	ctx->message[14] = (ULONG32)(ctx->length << 3);
+	ctx->message[15] = (ULONG32)(ctx->length >> 29);
+	md5_process_block(ctx->hash, ctx->message);
+	if (result_out)
+	{
+		LE32_COPY(result_out, 0U, &ctx->hash, 16U);
+	}
 }
