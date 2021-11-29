@@ -27,6 +27,10 @@ BOOL random_setup(void)
 
 void random_init(rand_state_t *const state)
 {
+	if (!ptr_rtlgenrandom)
+	{
+		abort(); /*not set up yet!*/
+	}
 	ptr_rtlgenrandom(state, sizeof(rand_state_t));
 }
 

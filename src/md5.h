@@ -21,7 +21,6 @@ typedef struct _md5_ctx
 }
 md5_ctx_t;
 
-
 void md5_init(md5_ctx_t *const ctx);
 void md5_update(md5_ctx_t *const ctx, const BYTE *msg, SIZE_T size);
 void md5_final(md5_ctx_t *const ctx, BYTE *const result_out);

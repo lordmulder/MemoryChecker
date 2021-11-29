@@ -16,6 +16,7 @@
 #include <stdarg.h>
 #include <process.h>
 #include <io.h>
+#include <time.h>
 #include "random.h"
 #include "md5.h"
 #include "version.h"
@@ -105,6 +106,16 @@ static SIZE_T get_cpu_count()
 	SecureZeroMemory(&info, sizeof(SYSTEM_INFO));
 	GetSystemInfo(&info);
 	return info.dwNumberOfProcessors;
+}
+
+static BOOL set_process_priority(const BOOL high_priority)
+{
+	const DWORD current_priority = GetPriorityClass(GetCurrentProcess());
+	if ((current_priority == REALTIME_PRIORITY_CLASS) || (current_priority == HIGH_PRIORITY_CLASS) || ((!high_priority) && (current_priority == ABOVE_NORMAL_PRIORITY_CLASS)))
+	{
+		return TRUE;
+	}
+	return SetPriorityClass(GetCurrentProcess(), high_priority ? HIGH_PRIORITY_CLASS : ABOVE_NORMAL_PRIORITY_CLASS);
 }
 
 static PVOID allocate_chunk(const SIZE_T size)
@@ -338,7 +349,8 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	SIZE_T target_memory = 0U, allocated_memory = 0U, page_size = 0U;
 	SIZE_T chunk_size = 0U, working_set_size = 0U, pass = 0U, chunk_idx = 0U, thread_idx = 0U;
 	LONG64 completed_last = 0LL;
-	BOOL batch_mode = FALSE, continuous_mode = FALSE, percent_mode = FALSE;
+	clock_t clock_total[2U] = { 0L, 0L }, clock_pass[2U] = { 0L, 0L };
+	BOOL batch_mode = FALSE, continuous_mode = FALSE, percent_mode = FALSE, high_priority = FALSE;
 	meminfo_t phys_memory;
 	HANDLE thread[MAX_THREAD];
 
@@ -381,6 +393,11 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 				if (!_wcsicmp(option, L"monochrome"))
 				{
 					color_mode = FALSE;
+					continue;
+				}
+				if (!_wcsicmp(option, L"high"))
+				{
+					high_priority = TRUE;
 					continue;
 				}
 				print_app_logo();
@@ -426,15 +443,11 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		}
 	}
 
+	clock_total[0U] = clock();
+
 	/* ----------------------------------------------------- */
 	/* Get system properties                                 */
 	/* ----------------------------------------------------- */
-
-	if (!random_setup())
-	{
-		print_msg(MSGTYPE_ERR, "System error: Failed to initialize RtlGenRandom() function!\n\n");
-		goto cleanup;
-	}
 
 	if (!(page_size = get_page_size()))
 	{
@@ -495,6 +508,17 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	}
 
 	fprint_msg(MSGTYPE_NFO, "Threads count : %zu\n\n", num_threads);
+
+	if (!random_setup())
+	{
+		print_msg(MSGTYPE_ERR, "System error: Failed to initialize the RtlGenRandom() function!\n\n");
+		goto cleanup;
+	}
+
+	if (!set_process_priority(high_priority))
+	{
+		print_msg(MSGTYPE_WRN, "WARNING: Failed to adjust process priority class!\n\n");
+	}
 
 	/* ----------------------------------------------------- */
 	/* Allocated memory                                      */
@@ -581,6 +605,8 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			fprint_msg(MSGTYPE_HDR, "--- [ Testing pass %zu ] ---\n\n", pass + 1U);
 		}
 
+		clock_pass[0U] = clock();
+
 		/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 		/* Fill memory                               */
 		/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
@@ -593,11 +619,16 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		for (thread_idx = 0U; thread_idx < num_threads; ++thread_idx)
 		{
-			thread[thread_idx] = (HANDLE)_beginthreadex(NULL, 0, thread_fill, (PVOID)thread_idx, 0U, NULL);
+			thread[thread_idx] = (HANDLE) _beginthreadex(NULL, 0, thread_fill, (PVOID)thread_idx, 0U, NULL);
 			if (thread[thread_idx] == 0U)
 			{
 				print_msg(MSGTYPE_WRN, "\rFailed!\n\n");
 				print_msg(MSGTYPE_ERR, "System error: Thread creation has failed!\n\n");
+				while (thread_idx > 0U)
+				{
+					TerminateThread(thread[--thread_idx], EXIT_FAILURE);
+					CloseHandle(thread[thread_idx]);
+				}
 				goto cleanup;
 			}
 		}
@@ -662,6 +693,11 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			{
 				print_msg(MSGTYPE_WRN, "\rFailed!\n\n");
 				print_msg(MSGTYPE_ERR, "System error: Thread creation has failed!\n\n");
+				while (thread_idx > 0U)
+				{
+					TerminateThread(thread[--thread_idx], EXIT_FAILURE);
+					CloseHandle(thread[thread_idx]);
+				}
 				goto cleanup;
 			}
 		}
@@ -704,7 +740,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		if (chk_error != 0LL)
 		{
 			print_msg(MSGTYPE_WRN, "\rFailed!\n\n");
-			fprint_msg(MSGTYPE_NFO, "Error: %ll hash check(s) have failed. Memory corruption :-(\n\n", chk_error);
+			fprint_msg(MSGTYPE_ERR, "Error: %lld hash check(s) have failed. Memory corrupted :-(\n\n", chk_error);
 			goto cleanup;
 		}
 
@@ -714,7 +750,10 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			goto cleanup;
 		}
 
+		clock_pass[1U] = clock();
+
 		fprint_msg(MSGTYPE_FIN, "\r%.1f%% [OK]\n\n", 100.0 * ((double)completed / allocated_memory));
+		fprint_msg(MSGTYPE_NFO, "Pass completed after %.1f seconds.\n\n", (clock_pass[1U] - clock_pass[0U]) / ((double)CLOCKS_PER_SEC));
 		set_console_progress(pass + 1U, continuous_mode ? 0U : NUM_PASSES, 100.0);
 	}
 
@@ -726,8 +765,10 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	print_msg(MSGTYPE_FIN, "No errors have been detected during the test :-)\n\n");
 	
 	exit_code = EXIT_SUCCESS;
-	
+
 cleanup:
+
+	clock_total[1U] = clock();
 
 	print_msg(MSGTYPE_NFO, "Cleaning up... ");
 
@@ -741,7 +782,7 @@ cleanup:
 		current_chunk->addr = NULL;
 	}
 
-	print_msg(MSGTYPE_NFO, "Goodbye!\n\n");
+	fprint_msg(MSGTYPE_NFO, "Goodbye!\n\nTest run completed after %.1f seconds.\n\n", (clock_total[1U] - clock_total[0U]) / ((double)CLOCKS_PER_SEC));
 
 	if (!(batch_mode || stop))
 	{

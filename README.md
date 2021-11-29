@@ -44,7 +44,7 @@ Options
 The following command-line options are available:
 
 - **`--batch`**:  
-  Exit the program immediately (i.e. do **not** wait for key press) when the test has completed or failed.
+  Exit the program immediately (i.e. do **not** wait for a key press) when the test has completed or failed.
 
 - **`--continuous`**:  
   Keep the test running until either an error is detected or the test is interrupted *manually*.
@@ -54,6 +54,9 @@ The following command-line options are available:
 
 - **`--monochrome`**:  
   Disable colored console output. It is implicitly disabled when redirecting to a file or pipe.
+
+- **`--high`**:  
+  Run the program with “high” priority. Be aware that this can cause the system to become unresponsive!
 
 Exit Code
 ---------
