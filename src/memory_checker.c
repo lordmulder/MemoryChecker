@@ -22,11 +22,8 @@
 #include "version.h"
 
 #define MAX_CHUNKS 4096U
-#define MAX_THREAD   32U
-#define NUM_PASSES    8U
-
+#define MAX_THREAD 32U
 #define MIN_MEMORY (512U * 1024U * 1024U)
-
 #define RW_BUFSIZE ((SIZE_T)16U)
 
 /* ====================================================================== */
@@ -69,7 +66,7 @@ static const char* const BUILD_DATE = __DATE__;
 static chunk_t CHUNKS[MAX_CHUNKS];
 static digest_t DIGEST[MAX_CHUNKS];
 
-static SIZE_T num_chunks = 0U, num_threads = 0U;
+static SIZE_T num_passes = 8U, num_chunks = 0U, num_threads = 0U;
 
 static volatile LONG64 completed = 0LL;
 static volatile LONG64 chk_error = 0LL;
@@ -132,6 +129,21 @@ static PVOID allocate_chunk(const SIZE_T size)
 		VirtualFree(addr, 0, MEM_RELEASE);
 	}
 	return NULL;
+}
+
+static LONG read_envvar(const wchar_t *const name, ULONG64 *const value)
+{
+	wchar_t buffer[64U], *end_ptr = NULL;
+	const DWORD result = GetEnvironmentVariableW(name, buffer, 64U);
+	if ((result > 0U) && (result < 64U))
+	{
+		*value = wcstoull(buffer, &end_ptr, 10);
+		return ((*value) && (*end_ptr == L'\0')) ? 1L : (-1L);
+	}
+	else
+	{
+		return 0L; /*ERROR_ENVVAR_NOT_FOUND*/
+	}
 }
 
 static void set_console_progress(const SIZE_T pass, const SIZE_T total, const double progress)
@@ -202,7 +214,7 @@ static BOOL print_msg(const msgtype_t type, const char* const text)
 	}
 }
 
-static BOOL fprint_msg(const msgtype_t type, const char* const format, ...)
+static inline BOOL fprint_msg(const msgtype_t type, const char* const format, ...)
 {
 	char buffer[MAX_PATH];
 	va_list ap;
@@ -212,14 +224,14 @@ static BOOL fprint_msg(const msgtype_t type, const char* const format, ...)
 	return print_msg(type, buffer);
 }
 
-static void DBG_print_chunk(const SIZE_T index, const SIZE_T size, const PVOID* const addr)
+static inline void DBG_print_chunk(const SIZE_T index, const SIZE_T size, const PVOID* const addr)
 {
 	char buffer[64U];
 	_snprintf_s(buffer, 64U, _TRUNCATE, "[Memchkr] Memory: %04zX - %09zu - 0x%016zX\n", index, size, (ULONG_PTR)addr);
 	OutputDebugStringA(buffer);
 }
 
-static void DBG_print_digest(const SIZE_T index, const BYTE* const digest, const BOOL read_mode)
+static inline void DBG_print_digest(const SIZE_T index, const BYTE* const digest, const BOOL read_mode)
 {
 	char buffer[64U];
 	_snprintf_s(buffer, 64U, _TRUNCATE, "[Memchkr] Digest: %04zX - %s:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\n",
@@ -410,6 +422,13 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		break;
 	}
 
+	if (read_envvar(L"MEMCHCK_PASSES", &num_passes) < 0L)
+	{
+		print_app_logo();
+		print_msg(MSGTYPE_ERR, "Number of passes specified in environment variable MEMCHCK_PASSES is invalid!\n\n");
+		return EXIT_FAILURE;
+	}
+
 	print_app_logo(); /*always print the logo at this point*/
 
 	if (arg_offset < argc)
@@ -538,7 +557,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 	print_msg(MSGTYPE_NFO, "Allocating memory, please be patient, this will take a while...\n");
 	print_msg(MSGTYPE_PRG, "0.0%");
-	set_console_progress(0, continuous_mode ? 0U : NUM_PASSES, 0.0);
+	set_console_progress(0, continuous_mode ? 0U : num_passes, 0.0);
 
 	SecureZeroMemory(CHUNKS, sizeof(chunk_t) * MAX_CHUNKS);
 	chunk_size = round_up(128U * 1024U * 1024U, page_size);
@@ -560,7 +579,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 				retry_counter = 0U;
 				const double progress = 100.0 * ((double)allocated_memory / target_memory);
 				fprint_msg(MSGTYPE_PRG, "\r%.1f%%", progress);
-				set_console_progress(0, continuous_mode ? 0U : NUM_PASSES, progress);
+				set_console_progress(0, continuous_mode ? 0U : num_passes, progress);
 				if (debug_mode)
 				{
 					DBG_print_chunk(num_chunks - 1U, chunk_size, addr);
@@ -585,7 +604,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	}
 
 	fprint_msg(MSGTYPE_FIN, "\r%.1f%% [OK]\n\n", 100.0 * ((double)allocated_memory / target_memory));
-	set_console_progress(0, continuous_mode ? 0U : NUM_PASSES, 100.0);
+	set_console_progress(0, continuous_mode ? 0U : num_passes, 100.0);
 
 	fprint_msg(MSGTYPE_NFO, "Allocated memory : %012zu (0x%010zX)\n\n", allocated_memory, allocated_memory);
 
@@ -600,11 +619,11 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	/* Test memory                                           */
 	/* ----------------------------------------------------- */
 
-	for (pass = 0U; continuous_mode || (pass < NUM_PASSES); ++pass)
+	for (pass = 0U; continuous_mode || (pass < num_passes); ++pass)
 	{
 		if (!continuous_mode)
 		{
-			fprint_msg(MSGTYPE_HDR, "--- [ Pass %zu of %zu ] ---\n\n", pass + 1U, (SIZE_T)NUM_PASSES);
+			fprint_msg(MSGTYPE_HDR, "--- [ Pass %zu of %zu ] ---\n\n", pass + 1U, (SIZE_T)num_passes);
 		}
 		else
 		{
@@ -619,7 +638,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		print_msg(MSGTYPE_NFO, "Writing memory, please be patient, this will take a while...\n");
 		print_msg(MSGTYPE_PRG, "0.0%");
-		set_console_progress(pass + 1U, continuous_mode ? 0U : NUM_PASSES, 0.0);
+		set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 0.0);
 
 		completed = completed_last = 0LL;
 
@@ -653,7 +672,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 				{
 					const double progress = 100.0 * ((double)completed_current / allocated_memory);
 					fprint_msg(MSGTYPE_PRG, "\r%.1f%%", progress);
-					set_console_progress(pass + 1U, continuous_mode ? 0U : NUM_PASSES, 0.5 * progress);
+					set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 0.5 * progress);
 					completed_last = completed_current;
 				}
 			}
@@ -688,7 +707,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		print_msg(MSGTYPE_NFO, "Reading memory, please be patient, this will take a while...\n");
 		print_msg(MSGTYPE_PRG, "0.0%");
-		set_console_progress(pass + 1U, continuous_mode ? 0U : NUM_PASSES, 50.0);
+		set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 50.0);
 
 		completed = completed_last = 0LL;
 
@@ -722,7 +741,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 				{
 					const double progress = 100.0 * ((double)completed_current / allocated_memory);
 					fprint_msg(MSGTYPE_PRG, "\r%.1f%%", progress);
-					set_console_progress(pass + 1U, continuous_mode ? 0U : NUM_PASSES, 50.0 + (0.5 * progress));
+					set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 50.0 + (0.5 * progress));
 					completed_last = completed_current;
 				}
 			}
@@ -760,7 +779,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		fprint_msg(MSGTYPE_FIN, "\r%.1f%% [OK]\n\n", 100.0 * ((double)completed / allocated_memory));
 		fprint_msg(MSGTYPE_NFO, "Pass completed after %.1f seconds.\n\n", (clock_pass[1U] - clock_pass[0U]) / ((double)CLOCKS_PER_SEC));
-		set_console_progress(pass + 1U, continuous_mode ? 0U : NUM_PASSES, 100.0);
+		set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 100.0);
 	}
 
 	/* ----------------------------------------------------- */

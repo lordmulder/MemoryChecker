@@ -58,6 +58,14 @@ The following command-line options are available:
 - **`--high`**:  
   Run the program with “high” priority. Be aware that this can cause the system to become unresponsive!
 
+Environment
+-----------
+
+The following environment can be used tweak the behavior of *Memory Checker*:
+
+- **`MEMCHCK_PASSES`**:  
+  Overrides the number of testing passes to execute. By default, *eight* testing passed will be executed.
+
 Exit Code
 ---------
 
@@ -71,7 +79,7 @@ First of all, the *Memory Checker* allocates the specified amount of memory to b
 
 All allocated memory pages are “locked” (pinned) in the physical memory, so that they can **not** swapped out to the disk during the test.
 
-Once the required memory has been allocated, the actual testing begins. By default, **five** testing passed will be executed. Each pass consist of the following *two* phases:
+Once the required memory has been allocated, the actual testing begins. By default, *eight* testing passed will be executed. Each pass consist of the following *two* phases:
 
 1. Fill the entire memory with *pseudo-random* data (different in each run), using *multiple* threads in order to max out the throughput.
 

@@ -9,6 +9,6 @@
 #define MEMCK_VERSION_MAJOR    1
 #define MEMCK_VERSION_MINOR_HI 0
 #define MEMCK_VERSION_MINOR_LO 2
-#define MEMCK_VERSION_PATCH    0
+#define MEMCK_VERSION_PATCH    1
 
 #endif
