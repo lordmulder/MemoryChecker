@@ -16,8 +16,9 @@ typedef struct
 }
 rand_state_t;
 
+BOOL random_setup(void);
 void random_init(rand_state_t *const state);
 ULONG32 random_next(rand_state_t *const state);
-BOOL random_setup(void);
+void random_bytes(rand_state_t *const state, BYTE *buffer, SIZE_T size);
 
 #endif

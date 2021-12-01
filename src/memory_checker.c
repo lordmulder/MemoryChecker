@@ -27,6 +27,8 @@
 
 #define MIN_MEMORY (512U * 1024U * 1024U)
 
+#define RW_BUFSIZE ((SIZE_T)16U)
+
 /* ====================================================================== */
 /* Typedefs                                                               */
 /* ====================================================================== */
@@ -282,6 +284,7 @@ static UINT32 thread_fill(void *const arg)
 	md5_ctx_t md5_ctx;
 	rand_state_t rand_state;
 	SIZE_T chunk_idx;
+	BYTE temp[RW_BUFSIZE];
 	const SIZE_T id = (SIZE_T)arg;
 
 	random_init(&rand_state);
@@ -290,11 +293,11 @@ static UINT32 thread_fill(void *const arg)
 	{
 		BYTE *const limit = CHUNKS[chunk_idx].addr + CHUNKS[chunk_idx].size;
 		md5_init(&md5_ctx);
-		for (BYTE *addr = CHUNKS[chunk_idx].addr; addr < limit; addr += sizeof(ULONG64))
+		for (BYTE *addr = CHUNKS[chunk_idx].addr; addr < limit; addr += RW_BUFSIZE)
 		{
-			const ULONG64 value = (((ULONG64)random_next(&rand_state)) << 32) | ((ULONG64)random_next(&rand_state));
-			memcpy(addr, &value, sizeof(ULONG64));
-			md5_update(&md5_ctx, (const BYTE*)&value, sizeof(ULONG64));
+			random_bytes(&rand_state, temp, RW_BUFSIZE);
+			memcpy(addr, temp, RW_BUFSIZE);
+			md5_update(&md5_ctx, temp, RW_BUFSIZE);
 		}
 		md5_final(&md5_ctx, DIGEST[chunk_idx]);
 		if (debug_mode)
@@ -311,18 +314,17 @@ static UINT32 thread_check(void *const arg)
 {
 	md5_ctx_t md5_ctx;
 	SIZE_T chunk_idx;
-	BYTE digest[MD5_HASH_SIZE];
-	ULONG64 temp;
+	BYTE digest[MD5_HASH_SIZE], temp[RW_BUFSIZE];
 	const SIZE_T id = (SIZE_T)arg;
 
 	for (chunk_idx = id; (!stop) && (chunk_idx < num_chunks); chunk_idx += num_threads)
 	{
 		BYTE *const limit = CHUNKS[chunk_idx].addr + CHUNKS[chunk_idx].size;
 		md5_init(&md5_ctx);
-		for (BYTE *addr = CHUNKS[chunk_idx].addr; addr < limit; addr += sizeof(ULONG64))
+		for (BYTE *addr = CHUNKS[chunk_idx].addr; addr < limit; addr += RW_BUFSIZE)
 		{
-			memcpy(&temp, addr, sizeof(ULONG64));
-			md5_update(&md5_ctx, (const BYTE*)&temp, sizeof(ULONG64));
+			memcpy(temp, addr, RW_BUFSIZE);
+			md5_update(&md5_ctx, (const BYTE*)&temp, RW_BUFSIZE);
 		}
 		md5_final(&md5_ctx, digest);
 		if (debug_mode)
@@ -455,9 +457,9 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		goto cleanup;
 	}
 
-	if (page_size % sizeof(ULONG64) != 0)
+	if ((page_size % RW_BUFSIZE) != 0)
 	{
-		fprint_msg(MSGTYPE_ERR, "System error: Page size is *not* a multiple of %zu bytes!\n\n", sizeof(ULONG64));
+		fprint_msg(MSGTYPE_ERR, "System error: Page size is *not* a multiple of %zu bytes!\n\n", RW_BUFSIZE);
 		goto cleanup;
 	}
 
@@ -515,7 +517,11 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		goto cleanup;
 	}
 
-	if (!set_process_priority(high_priority))
+	if (set_process_priority(high_priority))
+	{
+		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+	}
+	else
 	{
 		print_msg(MSGTYPE_WRN, "WARNING: Failed to adjust process priority class!\n\n");
 	}
@@ -635,7 +641,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		while (!stop)
 		{
-			const DWORD result = WaitForMultipleObjects((DWORD)num_threads, thread, TRUE, 1250U);
+			const DWORD result = WaitForMultipleObjects((DWORD)num_threads, thread, TRUE, 997U);
 			if ((result >= WAIT_OBJECT_0) && (result < WAIT_OBJECT_0 + num_threads))
 			{
 				break; /*completed*/
@@ -704,7 +710,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		while (!stop)
 		{
-			const DWORD result = WaitForMultipleObjects((DWORD)num_threads, thread, TRUE, 1250U);
+			const DWORD result = WaitForMultipleObjects((DWORD)num_threads, thread, TRUE, 997U);
 			if ((result >= WAIT_OBJECT_0) && (result < WAIT_OBJECT_0 + num_threads))
 			{
 				break; /*completed*/

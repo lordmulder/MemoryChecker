@@ -9,7 +9,9 @@
 #include <stdlib.h>
 #include "random.h"
 
-static BOOLEAN(APIENTRY *ptr_rtlgenrandom)(void*, ULONG) = NULL;
+#define ASSERT(X) do { if(!(X)) abort(); } while(0)
+
+static BOOLEAN(APIENTRY* ptr_rtlgenrandom)(void*, ULONG) = NULL;
 
 BOOL random_setup(void)
 {
@@ -25,7 +27,7 @@ BOOL random_setup(void)
 	return FALSE;
 }
 
-void random_init(rand_state_t *const state)
+void random_init(rand_state_t* const state)
 {
 	if (!ptr_rtlgenrandom)
 	{
@@ -34,7 +36,7 @@ void random_init(rand_state_t *const state)
 	ptr_rtlgenrandom(state, sizeof(rand_state_t));
 }
 
-ULONG32 random_next(rand_state_t *const state)
+ULONG32 random_next(rand_state_t* const state)
 {
 	const ULONG32 t = state->x ^ (state->x >> 2);
 	state->x = state->y;
@@ -43,4 +45,15 @@ ULONG32 random_next(rand_state_t *const state)
 	state->w = state->v;
 	state->v ^= (state->v << 4) ^ t ^ (t << 1);
 	return (state->d += 0x000587C5) + state->v;
+}
+
+void random_bytes(rand_state_t* const state, BYTE* buffer, SIZE_T size)
+{
+	ASSERT((size % sizeof(ULONG32)) == 0U);
+	while (size > 0U)
+	{
+		*((ULONG32*)buffer) = random_next(state);
+		size -= sizeof(ULONG32);
+		buffer += sizeof(ULONG32);
+	}
 }
