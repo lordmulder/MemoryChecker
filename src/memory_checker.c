@@ -25,6 +25,7 @@
 #define MAX_THREAD 32U
 #define MIN_MEMORY (512U * 1024U * 1024U)
 #define RW_BUFSIZE ((SIZE_T)16U)
+#define UPDATE_INT 997U
 
 /* ====================================================================== */
 /* Typedefs                                                               */
@@ -295,7 +296,7 @@ static UINT32 thread_fill(void *const arg)
 {
 	md5_ctx_t md5_ctx;
 	rand_state_t rand_state;
-	SIZE_T chunk_idx;
+	SIZE_T chunk_idx, upd_counter = 0U;
 	BYTE temp[RW_BUFSIZE];
 	const SIZE_T id = (SIZE_T)arg;
 
@@ -310,13 +311,22 @@ static UINT32 thread_fill(void *const arg)
 			random_bytes(&rand_state, temp, RW_BUFSIZE);
 			memcpy(addr, temp, RW_BUFSIZE);
 			md5_update(&md5_ctx, temp, RW_BUFSIZE);
+			if (++upd_counter >= UPDATE_INT)
+			{
+				InterlockedAdd64(&completed, UPDATE_INT * RW_BUFSIZE);
+				upd_counter = 0U;
+			}
 		}
 		md5_final(&md5_ctx, DIGEST[chunk_idx]);
 		if (debug_mode)
 		{
 			DBG_print_digest(chunk_idx, DIGEST[chunk_idx], FALSE);
 		}
-		InterlockedAdd64(&completed, CHUNKS[chunk_idx].size);
+	}
+
+	if (upd_counter > 0U)
+	{
+		InterlockedAdd64(&completed, upd_counter * RW_BUFSIZE);
 	}
 
 	return stop ? EXIT_FAILURE : EXIT_SUCCESS;
@@ -325,7 +335,7 @@ static UINT32 thread_fill(void *const arg)
 static UINT32 thread_check(void *const arg)
 {
 	md5_ctx_t md5_ctx;
-	SIZE_T chunk_idx;
+	SIZE_T chunk_idx, upd_counter = 0U;
 	BYTE digest[MD5_HASH_SIZE], temp[RW_BUFSIZE];
 	const SIZE_T id = (SIZE_T)arg;
 
@@ -337,6 +347,11 @@ static UINT32 thread_check(void *const arg)
 		{
 			memcpy(temp, addr, RW_BUFSIZE);
 			md5_update(&md5_ctx, (const BYTE*)&temp, RW_BUFSIZE);
+			if (++upd_counter >= UPDATE_INT)
+			{
+				InterlockedAdd64(&completed, UPDATE_INT * RW_BUFSIZE);
+				upd_counter = 0U;
+			}
 		}
 		md5_final(&md5_ctx, digest);
 		if (debug_mode)
@@ -347,7 +362,11 @@ static UINT32 thread_check(void *const arg)
 		{
 			InterlockedIncrement64(&chk_error);
 		}
-		InterlockedAdd64(&completed, CHUNKS[chunk_idx].size);
+	}
+
+	if (upd_counter > 0U)
+	{
+		InterlockedAdd64(&completed, upd_counter * RW_BUFSIZE);
 	}
 
 	return stop ? EXIT_FAILURE : EXIT_SUCCESS;
@@ -362,8 +381,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	int exit_code = EXIT_FAILURE, arg_offset = 1;
 	SIZE_T target_memory = 0U, allocated_memory = 0U, page_size = 0U;
 	SIZE_T chunk_size = 0U, working_set_size = 0U, pass = 0U, chunk_idx = 0U, thread_idx = 0U;
-	LONG64 completed_last = 0LL;
-	clock_t clock_total[2U] = { 0L, 0L }, clock_pass[2U] = { 0L, 0L };
+	clock_t clock_total[2U] = { 0L, 0L }, clock_pass = 0L;
 	BOOL batch_mode = FALSE, continuous_mode = FALSE, percent_mode = FALSE, high_priority = FALSE;
 	meminfo_t phys_memory;
 	HANDLE thread[MAX_THREAD];
@@ -630,7 +648,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			fprint_msg(MSGTYPE_HDR, "--- [ Testing pass %zu ] ---\n\n", pass + 1U);
 		}
 
-		clock_pass[0U] = clock();
+		clock_pass = clock();
 
 		/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 		/* Fill memory                               */
@@ -640,7 +658,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		print_msg(MSGTYPE_PRG, "0.0%");
 		set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 0.0);
 
-		completed = completed_last = 0LL;
+		completed = 0LL;
 
 		for (thread_idx = 0U; thread_idx < num_threads; ++thread_idx)
 		{
@@ -660,21 +678,16 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		while (!stop)
 		{
-			const DWORD result = WaitForMultipleObjects((DWORD)num_threads, thread, TRUE, 997U);
+			const DWORD result = WaitForMultipleObjects((DWORD)num_threads, thread, TRUE, UPDATE_INT);
 			if ((result >= WAIT_OBJECT_0) && (result < WAIT_OBJECT_0 + num_threads))
 			{
 				break; /*completed*/
 			}
 			else if (result == WAIT_TIMEOUT)
 			{
-				const LONG64 completed_current = completed;
-				if (completed_current != completed_last)
-				{
-					const double progress = 100.0 * ((double)completed_current / allocated_memory);
-					fprint_msg(MSGTYPE_PRG, "\r%.1f%%", progress);
-					set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 0.5 * progress);
-					completed_last = completed_current;
-				}
+				const double progress = 100.0 * ((double)completed / allocated_memory);
+				fprint_msg(MSGTYPE_PRG, "\r%.1f%%", progress);
+				set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 0.5 * progress);
 			}
 			else
 			{
@@ -699,7 +712,12 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			goto cleanup;
 		}
 
-		fprint_msg(MSGTYPE_FIN, "\r%.1f%% [OK]\n\n", 100.0 * ((double)completed / allocated_memory));
+		fprint_msg(MSGTYPE_FIN, "\r%.1f%% [OK]\n\n", 100.0);
+
+		if ((SIZE_T)completed != allocated_memory)
+		{
+			print_msg(MSGTYPE_WRN, "WARNING: Completed memory counter does not match total allocated memory!\n\n");
+		}
 
 		/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 		/* Check memory                              */
@@ -709,7 +727,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		print_msg(MSGTYPE_PRG, "0.0%");
 		set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 50.0);
 
-		completed = completed_last = 0LL;
+		completed = 0LL;
 
 		for (thread_idx = 0U; thread_idx < num_threads; ++thread_idx)
 		{
@@ -729,21 +747,16 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		while (!stop)
 		{
-			const DWORD result = WaitForMultipleObjects((DWORD)num_threads, thread, TRUE, 997U);
+			const DWORD result = WaitForMultipleObjects((DWORD)num_threads, thread, TRUE, UPDATE_INT);
 			if ((result >= WAIT_OBJECT_0) && (result < WAIT_OBJECT_0 + num_threads))
 			{
 				break; /*completed*/
 			}
 			else if (result == WAIT_TIMEOUT)
 			{
-				const LONG64 completed_current = completed;
-				if (completed_current != completed_last)
-				{
-					const double progress = 100.0 * ((double)completed_current / allocated_memory);
-					fprint_msg(MSGTYPE_PRG, "\r%.1f%%", progress);
-					set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 50.0 + (0.5 * progress));
-					completed_last = completed_current;
-				}
+				const double progress = 100.0 * ((double)completed / allocated_memory);
+				fprint_msg(MSGTYPE_PRG, "\r%.1f%%", progress);
+				set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 50.0 + (0.5 * progress));
 			}
 			else
 			{
@@ -775,11 +788,15 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			goto cleanup;
 		}
 
-		clock_pass[1U] = clock();
-
-		fprint_msg(MSGTYPE_FIN, "\r%.1f%% [OK]\n\n", 100.0 * ((double)completed / allocated_memory));
-		fprint_msg(MSGTYPE_NFO, "Pass completed after %.1f seconds.\n\n", (clock_pass[1U] - clock_pass[0U]) / ((double)CLOCKS_PER_SEC));
+		fprint_msg(MSGTYPE_FIN, "\r%.1f%% [OK]\n\n", 100.0);
 		set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 100.0);
+
+		if ((SIZE_T)completed != allocated_memory)
+		{
+			print_msg(MSGTYPE_WRN, "WARNING: Completed memory counter does not match total allocated memory!\n\n");
+		}
+
+		fprint_msg(MSGTYPE_NFO, "Pass completed after %.1f seconds.\n\n", (clock() - clock_pass) / ((double)CLOCKS_PER_SEC));
 	}
 
 	/* ----------------------------------------------------- */
