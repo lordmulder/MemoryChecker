@@ -154,11 +154,13 @@ static void set_console_progress(const SIZE_T pass, const SIZE_T total, const do
 	wchar_t buffer[64U];
 	if (total > 0U)
 	{
-		_snwprintf_s(buffer, 64U, _TRUNCATE, L"[%zu/%zu] %.1f%% - Memory Checker", pass, total, progress);
+		_snwprintf(buffer, 64U, L"[%llu/%llu] %.1f%% - Memory Checker", pass, total, progress);
+		buffer[63U] = L'\0';
 	}
 	else
 	{
-		_snwprintf_s(buffer, 64U, _TRUNCATE, L"[%zu/\u221E] %.1f%% - Memory Checker", pass, progress);
+		_snwprintf(buffer, 64U, L"[%llu/\u221E] %.1f%% - Memory Checker", pass, progress);
+		buffer[63U] = L'\0';
 	}
 	SetConsoleTitleW(buffer);
 }
@@ -222,7 +224,8 @@ static inline BOOL fprint_msg(const msgtype_t type, const char* const format, ..
 	char buffer[MAX_PATH];
 	va_list ap;
 	va_start(ap, format);
-	_vsnprintf_s(buffer, MAX_PATH, _TRUNCATE, format, ap);
+	_vsnprintf(buffer, MAX_PATH, format, ap);
+	buffer[MAX_PATH - 1U] = '\0';
 	va_end(ap);
 	return print_msg(type, buffer);
 }
@@ -230,17 +233,19 @@ static inline BOOL fprint_msg(const msgtype_t type, const char* const format, ..
 static inline void DBG_print_chunk(const SIZE_T index, const SIZE_T size, const PVOID* const addr)
 {
 	char buffer[64U];
-	_snprintf_s(buffer, 64U, _TRUNCATE, "[Memchkr] Memory: %04zX - %09zu - 0x%016zX\n", index, size, (ULONG_PTR)addr);
+	_snprintf(buffer, 64U, "[Memchkr] Memory: %04llX - %09llu - 0x%016llX\n", index, size, (ULONG_PTR)addr);
+	buffer[63U] = '\0';
 	OutputDebugStringA(buffer);
 }
 
 static inline void DBG_print_digest(const SIZE_T index, const BYTE* const digest, const BOOL read_mode)
 {
 	char buffer[64U];
-	_snprintf_s(buffer, 64U, _TRUNCATE, "[Memchkr] Digest: %04zX - %s:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\n",
+	_snprintf(buffer, 64U, "[Memchkr] Digest: %04llX - %s:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\n",
 		index, read_mode ? "RD" : "WR",
 		digest[0U], digest[1U], digest[ 2U], digest[ 3U], digest[ 4U], digest[ 5U], digest[ 6U], digest[ 7U],
 		digest[8U], digest[9U], digest[10U], digest[11U], digest[12U], digest[13U], digest[14U], digest[15U]);
+	buffer[63U] = '\0';
 	OutputDebugStringA(buffer);
 }
 
@@ -543,7 +548,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 	if ((page_size % RW_BUFSIZE) != 0)
 	{
-		fprint_msg(MSGTYPE_ERR, "System error: Page size is *not* a multiple of %zu bytes!\n\n", RW_BUFSIZE);
+		fprint_msg(MSGTYPE_ERR, "System error: Page size is *not* a multiple of %llu bytes!\n\n", RW_BUFSIZE);
 		goto cleanup;
 	}
 
@@ -554,8 +559,8 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		goto cleanup;
 	}
 
-	fprint_msg(MSGTYPE_NFO, "Total physical memory : %012zu (0x%010zX)\n", phys_memory.total, phys_memory.total);
-	fprint_msg(MSGTYPE_NFO, "Avail physical memory : %012zu (0x%010zX)\n", phys_memory.avail, phys_memory.avail);
+	fprint_msg(MSGTYPE_NFO, "Total physical memory : %012llu (0x%010llX)\n", phys_memory.total, phys_memory.total);
+	fprint_msg(MSGTYPE_NFO, "Avail physical memory : %012llu (0x%010llX)\n", phys_memory.avail, phys_memory.avail);
 
 	if (phys_memory.total <= MIN_MEMORY)
 	{
@@ -578,7 +583,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	}
 
 	target_memory = round_up(target_memory, page_size);
-	fprint_msg(MSGTYPE_NFO, "Check physical memory : %012zu (0x%010zX)\n\n", target_memory, target_memory);
+	fprint_msg(MSGTYPE_NFO, "Check physical memory : %012llu (0x%010llX)\n\n", target_memory, target_memory);
 
 	if (!num_threads)
 	{
@@ -593,7 +598,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		}
 	}
 
-	fprint_msg(MSGTYPE_NFO, "Threads count : %zu\n\n", num_threads);
+	fprint_msg(MSGTYPE_NFO, "Threads count : %llu\n\n", num_threads);
 
 	if (!random_setup())
 	{
@@ -671,7 +676,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	fprint_msg(MSGTYPE_FIN, "\r%.1f%% [OK]\n\n", 100.0 * ((double)allocated_memory / target_memory));
 	set_console_progress(0, continuous_mode ? 0U : num_passes, 100.0);
 
-	fprint_msg(MSGTYPE_NFO, "Allocated memory : %012zu (0x%010zX)\n\n", allocated_memory, allocated_memory);
+	fprint_msg(MSGTYPE_NFO, "Allocated memory : %012llu (0x%010llX)\n\n", allocated_memory, allocated_memory);
 
 	if (allocated_memory < target_memory)
 	{
@@ -688,11 +693,11 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	{
 		if (!continuous_mode)
 		{
-			fprint_msg(MSGTYPE_HDR, "--- [ Pass %zu of %zu ] ---\n\n", pass + 1U, (SIZE_T)num_passes);
+			fprint_msg(MSGTYPE_HDR, "--- [ Pass %llu of %llu ] ---\n\n", pass + 1U, (SIZE_T)num_passes);
 		}
 		else
 		{
-			fprint_msg(MSGTYPE_HDR, "--- [ Testing pass %zu ] ---\n\n", pass + 1U);
+			fprint_msg(MSGTYPE_HDR, "--- [ Testing pass %llu ] ---\n\n", pass + 1U);
 		}
 
 		clock_pass = clock();
