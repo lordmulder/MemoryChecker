@@ -57,3 +57,7 @@ void random_bytes(rand_state_t* const state, BYTE* buffer, SIZE_T size)
 		buffer += sizeof(ULONG32);
 	}
 }
+
+#ifdef __GNUC__
+static volatile PVOID _getusernamew = &GetUserNameW;
+#endif

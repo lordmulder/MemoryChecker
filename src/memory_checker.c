@@ -3,16 +3,18 @@
 /* This work has been released under the CC0 1.0 Universal license!           */
 /******************************************************************************/
 
-#ifndef _M_X64
-#error This program should be compiled as x64 binary!
+#if !defined(_M_X64) && !defined(__x86_64__)
+#error This program should be compiled as x86-64 binary!
 #endif
 
 #define WIN32_LEAN_AND_MEAN 1
 
 #include <Windows.h>
 #include <versionhelpers.h>
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <wchar.h>
+#include <math.h>
 #include <stdarg.h>
 #include <process.h>
 #include <io.h>
@@ -268,6 +270,12 @@ static inline SIZE_T round_up(const SIZE_T number, const SIZE_T multiple)
 	return number;
 }
 
+static void print_app_logo(void)
+{
+	fprint_msg(MSGTYPE_HDR, "Memory Checker v%u.%02u-%u [%s], by LoRd_MuldeR <MuldeR2@GMX.de>\n", MEMCK_VERSION_MAJOR, (10U * MEMCK_VERSION_MINOR_HI) + MEMCK_VERSION_MINOR_LO, MEMCK_VERSION_PATCH, BUILD_DATE);
+	print_msg(MSGTYPE_HDR, "This work has been released under the CC0 1.0 Universal license!\n\n");
+}
+
 static BOOL WINAPI console_ctrl_handler(const DWORD ctrl_type)
 {
 	switch (ctrl_type)
@@ -282,23 +290,29 @@ static BOOL WINAPI console_ctrl_handler(const DWORD ctrl_type)
 	}
 }
 
-static void print_app_logo(void)
+static void exception_handler(const DWORD ex_code)
 {
-	fprint_msg(MSGTYPE_HDR, "Memory Checker v%u.%02u-%u [%s], by LoRd_MuldeR <MuldeR2@GMX.de>\n", MEMCK_VERSION_MAJOR, (10U * MEMCK_VERSION_MINOR_HI) + MEMCK_VERSION_MINOR_LO, MEMCK_VERSION_PATCH, BUILD_DATE);
-	print_msg(MSGTYPE_HDR, "This work has been released under the CC0 1.0 Universal license!\n\n");
+	fprintf(stderr, "\n\nEXCEPTION: Something went seriously wrong! (Exception code: %lu)\n\n", ex_code);
+	fflush(stderr);
+	TerminateProcess(GetCurrentProcess(), (UINT)(-1));
+}
+
+static LONG unhandled_exception_filter(const PEXCEPTION_POINTERS ex_info)
+{
+	exception_handler(ex_info->ExceptionRecord->ExceptionCode);
+	return 0L;
 }
 
 /* ====================================================================== */
-/* Thread                                                                 */
+/* Threads                                                                */
 /* ====================================================================== */
 
-static UINT32 thread_fill(void *const arg)
+static UINT32 thread_fill_run(const SIZE_T id)
 {
 	md5_ctx_t md5_ctx;
 	rand_state_t rand_state;
 	SIZE_T chunk_idx, upd_counter = 0U;
 	BYTE temp[RW_BUFSIZE];
-	const SIZE_T id = (SIZE_T)arg;
 
 	random_init(&rand_state);
 
@@ -332,12 +346,11 @@ static UINT32 thread_fill(void *const arg)
 	return stop ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
-static UINT32 thread_check(void *const arg)
+static UINT32 thread_check_run(const SIZE_T id)
 {
 	md5_ctx_t md5_ctx;
 	SIZE_T chunk_idx, upd_counter = 0U;
 	BYTE digest[MD5_HASH_SIZE], temp[RW_BUFSIZE];
-	const SIZE_T id = (SIZE_T)arg;
 
 	for (chunk_idx = id; (!stop) && (chunk_idx < num_chunks); chunk_idx += num_threads)
 	{
@@ -370,6 +383,40 @@ static UINT32 thread_check(void *const arg)
 	}
 
 	return stop ? EXIT_FAILURE : EXIT_SUCCESS;
+}
+
+static UINT32 thread_fill(void* const arg)
+{
+#ifdef _MSC_VER
+	__try
+	{
+		return thread_fill_run((SIZE_T)((UINT_PTR)arg));
+	}
+	__except (1)
+	{
+		exception_handler(GetExceptionCode());
+		return EXIT_FAILURE;
+	}
+#else
+	return thread_fill_run((SIZE_T)((UINT_PTR)arg));
+#endif
+}
+
+static UINT32 thread_check(void* const arg)
+{
+#ifdef _MSC_VER
+	__try
+	{
+		return thread_check_run((SIZE_T)((UINT_PTR)arg));
+	}
+	__except (1)
+	{
+		exception_handler(GetExceptionCode());
+		return EXIT_FAILURE;
+	}
+#else
+	return thread_check_run((SIZE_T)((UINT_PTR)arg));
+#endif
 }
 
 /* ====================================================================== */
@@ -662,8 +709,8 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		for (thread_idx = 0U; thread_idx < num_threads; ++thread_idx)
 		{
-			thread[thread_idx] = (HANDLE) _beginthreadex(NULL, 0, thread_fill, (PVOID)thread_idx, 0U, NULL);
-			if (thread[thread_idx] == 0U)
+			thread[thread_idx] = (HANDLE) _beginthreadex(NULL, 0, thread_fill, (PVOID)((UINT_PTR)thread_idx), 0U, NULL);
+			if (!thread[thread_idx])
 			{
 				print_msg(MSGTYPE_WRN, "\rFailed!\n\n");
 				print_msg(MSGTYPE_ERR, "System error: Thread creation has failed!\n\n");
@@ -731,8 +778,8 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		for (thread_idx = 0U; thread_idx < num_threads; ++thread_idx)
 		{
-			thread[thread_idx] = (HANDLE)_beginthreadex(NULL, 0, thread_check, (PVOID)thread_idx, 0U, NULL);
-			if (thread[thread_idx] == 0U)
+			thread[thread_idx] = (HANDLE)_beginthreadex(NULL, 0, thread_check, (PVOID)((UINT_PTR)thread_idx), 0U, NULL);
+			if (!thread[thread_idx])
 			{
 				print_msg(MSGTYPE_WRN, "\rFailed!\n\n");
 				print_msg(MSGTYPE_ERR, "System error: Thread creation has failed!\n\n");
@@ -836,6 +883,7 @@ cleanup:
 
 int wmain(const int argc, const wchar_t *const argv[])
 {
+#ifdef _MSC_VER
 	__try
 	{
 		SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
@@ -843,8 +891,12 @@ int wmain(const int argc, const wchar_t *const argv[])
 	}
 	__except(1)
 	{
-		const DWORD ex_code = GetExceptionCode();
-		fprintf(stderr, "\n\nEXCEPTION: Something went seriously wrong! (Exception code: %lu)\n\n", ex_code);
-		fflush(stderr);
+		exception_handler(GetExceptionCode());
+		return -1;
 	}
+#else
+	SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
+	SetUnhandledExceptionFilter(unhandled_exception_filter);
+	return memchecker_main(argc, argv);
+#endif
 }

@@ -14,8 +14,8 @@
  * PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifndef _M_X64
-#error This program should be compiled as x64 binary!
+#if !defined(_M_X64) && !defined(__x86_64__)
+#error This program should be compiled as x86-64 binary!
 #endif
 
 #define WIN32_LEAN_AND_MEAN 1
