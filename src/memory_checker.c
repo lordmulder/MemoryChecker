@@ -18,7 +18,6 @@
 #include <stdarg.h>
 #include <process.h>
 #include <io.h>
-#include <time.h>
 #include "random.h"
 #include "md5.h"
 #include "version.h"
@@ -53,6 +52,8 @@ while(0)
 	BUFFER[(COUNT) - 1U] = '\0'; \
 } \
 while(0)
+
+#define TICKS_PER_SECOND 10000000.0
 
 /* ====================================================================== */
 /* Typedefs                                                               */
@@ -135,6 +136,13 @@ static SIZE_T get_cpu_count()
 	return info.dwNumberOfProcessors;
 }
 
+static inline ULONG64 query_clock()
+{
+	FILETIME filetime;
+	GetSystemTimeAsFileTime(&filetime);
+	return (((ULONG64)filetime.dwHighDateTime) << 32) | ((ULONG64)filetime.dwLowDateTime);
+}
+
 static BOOL set_process_priority(const BOOL high_priority)
 {
 	const DWORD current_priority = GetPriorityClass(GetCurrentProcess());
@@ -188,7 +196,7 @@ static void set_console_progress(const SIZE_T pass, const SIZE_T total, const do
 	SetConsoleTitleW(buffer);
 }
 
-static WORD get_text_attributes(const HANDLE handle)
+static inline WORD get_text_attributes(const HANDLE handle)
 {
 	CONSOLE_SCREEN_BUFFER_INFO info;
 	memset(&info, 0, sizeof(CONSOLE_SCREEN_BUFFER_INFO));
@@ -199,7 +207,7 @@ static WORD get_text_attributes(const HANDLE handle)
 	return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
 }
 
-static WORD get_text_color(const msgtype_t type)
+static inline WORD get_text_color(const msgtype_t type)
 {
 	switch (type)
 	{
@@ -218,13 +226,24 @@ static WORD get_text_color(const msgtype_t type)
 	}
 }
 
+static inline void write_to_cons(const HANDLE handle, const char *const text)
+{
+	DWORD bytes_written;
+	WriteConsoleA(handle, text, (DWORD)strlen(text), &bytes_written, NULL);
+}
+
+static inline void write_to_file(const HANDLE handle, const char *const text)
+{
+	DWORD bytes_written;
+	WriteFile(handle, text, (DWORD)strlen(text), &bytes_written, NULL);
+}
+
 static void print_msg(const msgtype_t type, const char *const text)
 {
 	static const WORD BACKGROUND_MASK = BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED | BACKGROUND_INTENSITY;
 	static HANDLE handle = INVALID_HANDLE_VALUE;
 	static DWORD file_type = MAXDWORD;
 	static WORD default_attributes = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-	DWORD bytes_written;
 	if (handle == INVALID_HANDLE_VALUE)
 	{
 		if ((file_type = GetFileType(handle = (HANDLE)_get_osfhandle(_fileno(stdout)))) == FILE_TYPE_CHAR)
@@ -237,17 +256,17 @@ static void print_msg(const msgtype_t type, const char *const text)
 		if (color_mode)
 		{
 			SetConsoleTextAttribute(handle, (default_attributes & BACKGROUND_MASK) | get_text_color(type));
-			WriteConsoleA(handle, text, (DWORD)strlen(text), &bytes_written, NULL);
+			write_to_cons(handle, text);
 			SetConsoleTextAttribute(handle, default_attributes);
 		}
 		else
 		{
-			WriteConsoleA(handle, text, (DWORD)strlen(text), &bytes_written, NULL);
+			write_to_cons(handle, text);
 		}
 	}
 	else
 	{
-		WriteFile(handle, text, (DWORD)strlen(text), &bytes_written, NULL);
+		write_to_file(handle, text);
 	}
 }
 
@@ -326,9 +345,8 @@ static BOOL WINAPI console_ctrl_handler(const DWORD ctrl_type)
 
 static void exception_handler(const DWORD ex_code)
 {
-	fprintf(stderr, "\n\nEXCEPTION: Something went seriously wrong! (Exception code: %lu)\n\n", ex_code);
-	fflush(stderr);
-	TerminateProcess(GetCurrentProcess(), (UINT)(-1));
+	fprint_msg(MSGTYPE_ERR, "\n\nEXCEPTION: Something went seriously wrong! (Exception code: 0x%08lX)\n\n", ex_code);
+	_Exit(-1);
 }
 
 static LONG unhandled_exception_filter(const PEXCEPTION_POINTERS ex_info)
@@ -421,36 +439,38 @@ static UINT32 thread_check_run(const SIZE_T id)
 
 static UINT32 thread_fill(void* const arg)
 {
+	int ret = EXIT_FAILURE;
 #ifdef _MSC_VER
 	__try
 	{
-		return thread_fill_run((SIZE_T)((UINT_PTR)arg));
+		ret = thread_fill_run((SIZE_T)((UINT_PTR)arg));
 	}
 	__except (1)
 	{
 		exception_handler(GetExceptionCode());
-		return EXIT_FAILURE;
 	}
 #else
-	return thread_fill_run((SIZE_T)((UINT_PTR)arg));
+	ret = thread_fill_run((SIZE_T)((UINT_PTR)arg));
 #endif
+	return ret;
 }
 
 static UINT32 thread_check(void* const arg)
 {
+	int ret = EXIT_FAILURE;
 #ifdef _MSC_VER
 	__try
 	{
-		return thread_check_run((SIZE_T)((UINT_PTR)arg));
+		ret = thread_check_run((SIZE_T)((UINT_PTR)arg));
 	}
 	__except (1)
 	{
 		exception_handler(GetExceptionCode());
-		return EXIT_FAILURE;
 	}
 #else
-	return thread_check_run((SIZE_T)((UINT_PTR)arg));
+	ret = thread_check_run((SIZE_T)((UINT_PTR)arg));
 #endif
+	return ret;
 }
 
 /* ====================================================================== */
@@ -462,7 +482,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	int exit_code = EXIT_FAILURE, arg_offset = 1;
 	SIZE_T target_memory = 0U, allocated_memory = 0U, page_size = 0U;
 	SIZE_T chunk_size = 0U, working_set_size = 0U, pass = 0U, chunk_idx = 0U, thread_idx = 0U;
-	clock_t clock_total[2U] = { 0L, 0L }, clock_pass = 0L;
+	ULONG64 clock_total[2U] = { 0L, 0L }, clock_pass = 0L;
 	BOOL batch_mode = FALSE, continuous_mode = FALSE, percent_mode = FALSE, high_priority = FALSE;
 	meminfo_t phys_memory;
 	HANDLE thread[MAX_THREAD];
@@ -563,7 +583,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		}
 	}
 
-	clock_total[0U] = clock();
+	clock_total[0U] = query_clock();
 
 	/* ----------------------------------------------------- */
 	/* Get system properties                                 */
@@ -729,7 +749,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			fprint_msg(MSGTYPE_HDR, "--- [ Testing pass %llu ] ---\n\n", pass + 1U);
 		}
 
-		clock_pass = clock();
+		clock_pass = query_clock();
 
 		/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 		/* Fill memory                               */
@@ -877,7 +897,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			print_msg(MSGTYPE_WRN, "WARNING: Completed memory counter does not match total allocated memory!\n\n");
 		}
 
-		fprint_msg(MSGTYPE_NFO, "Pass completed after %.1f seconds.\n\n", (clock() - clock_pass) / ((double)CLOCKS_PER_SEC));
+		fprint_msg(MSGTYPE_NFO, "Pass completed after %.1f seconds.\n\n", (query_clock() - clock_pass) / TICKS_PER_SECOND);
 	}
 
 	/* ----------------------------------------------------- */
@@ -891,7 +911,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 cleanup:
 
-	clock_total[1U] = clock();
+	clock_total[1U] = query_clock();
 
 	print_msg(MSGTYPE_NFO, "Cleaning up... ");
 
@@ -905,7 +925,7 @@ cleanup:
 		current_chunk->addr = NULL;
 	}
 
-	fprint_msg(MSGTYPE_NFO, "Goodbye!\n\nTest run completed after %.1f seconds.\n\n", (clock_total[1U] - clock_total[0U]) / ((double)CLOCKS_PER_SEC));
+	fprint_msg(MSGTYPE_NFO, "Goodbye!\n\nTest run completed after %.1f seconds.\n\n", (clock_total[1U] - clock_total[0U]) / TICKS_PER_SECOND);
 
 	if (!(batch_mode || stop))
 	{
@@ -917,20 +937,21 @@ cleanup:
 
 int wmain(const int argc, const wchar_t *const argv[])
 {
+	int ret = EXIT_FAILURE;
+	SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+	SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
 #ifdef _MSC_VER
 	__try
 	{
-		SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
-		return memchecker_main(argc, argv);
+		ret = memchecker_main(argc, argv);
 	}
-	__except(1)
+	__except (1)
 	{
 		exception_handler(GetExceptionCode());
-		return -1;
 	}
 #else
-	SetConsoleCtrlHandler(console_ctrl_handler, TRUE);
 	SetUnhandledExceptionFilter(unhandled_exception_filter);
-	return memchecker_main(argc, argv);
+	ret = memchecker_main(argc, argv);
 #endif
+	return ret;
 }
