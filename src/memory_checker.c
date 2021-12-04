@@ -30,6 +30,31 @@
 #define UPDATE_INT 997U
 
 /* ====================================================================== */
+/* Macros                                                                 */
+/* ====================================================================== */
+
+#define SNPRINTF(BUFFER, COUNT, FORMAT, ...) do \
+{ \
+	_snprintf((BUFFER), (COUNT), (FORMAT), __VA_ARGS__); \
+	BUFFER[(COUNT) - 1U] = '\0'; \
+} \
+while(0)
+
+#define SNWPRINTF(BUFFER, COUNT, FORMAT, ...) do \
+{ \
+	_snwprintf((BUFFER), (COUNT), (FORMAT), __VA_ARGS__); \
+	BUFFER[(COUNT) - 1U] = '\0'; \
+} \
+while(0)
+
+#define VSNPRINTF(BUFFER, COUNT, FORMAT, VA_LIST) do \
+{ \
+	_vsnprintf((BUFFER), (COUNT), (FORMAT), (VA_LIST)); \
+	BUFFER[(COUNT) - 1U] = '\0'; \
+} \
+while(0)
+
+/* ====================================================================== */
 /* Typedefs                                                               */
 /* ====================================================================== */
 
@@ -154,18 +179,27 @@ static void set_console_progress(const SIZE_T pass, const SIZE_T total, const do
 	wchar_t buffer[64U];
 	if (total > 0U)
 	{
-		_snwprintf(buffer, 64U, L"[%llu/%llu] %.1f%% - Memory Checker", pass, total, progress);
-		buffer[63U] = L'\0';
+		SNWPRINTF(buffer, 64U, L"[%llu/%llu] %.1f%% - Memory Checker", pass, total, progress);
 	}
 	else
 	{
-		_snwprintf(buffer, 64U, L"[%llu/\u221E] %.1f%% - Memory Checker", pass, progress);
-		buffer[63U] = L'\0';
+		SNWPRINTF(buffer, 64U, L"[%llu/\u221E] %.1f%% - Memory Checker", pass, progress);
 	}
 	SetConsoleTitleW(buffer);
 }
 
-static WORD get_text_attributes(const msgtype_t type)
+static WORD get_text_attributes(const HANDLE handle)
+{
+	CONSOLE_SCREEN_BUFFER_INFO info;
+	memset(&info, 0, sizeof(CONSOLE_SCREEN_BUFFER_INFO));
+	if (GetConsoleScreenBufferInfo(handle, &info))
+	{
+		return info.wAttributes;
+	}
+	return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+}
+
+static WORD get_text_color(const msgtype_t type)
 {
 	switch (type)
 	{
@@ -184,68 +218,63 @@ static WORD get_text_attributes(const msgtype_t type)
 	}
 }
 
-static BOOL print_msg(const msgtype_t type, const char* const text)
+static void print_msg(const msgtype_t type, const char *const text)
 {
 	static const WORD BACKGROUND_MASK = BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED | BACKGROUND_INTENSITY;
+	static HANDLE handle = INVALID_HANDLE_VALUE;
+	static DWORD file_type = MAXDWORD;
+	static WORD default_attributes = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
 	DWORD bytes_written;
-	const HANDLE handle = (HANDLE)_get_osfhandle(_fileno(stdout));
-	if (GetFileType(handle) == FILE_TYPE_CHAR)
+	if (handle == INVALID_HANDLE_VALUE)
+	{
+		if ((file_type = GetFileType(handle = (HANDLE)_get_osfhandle(_fileno(stdout)))) == FILE_TYPE_CHAR)
+		{
+			default_attributes = get_text_attributes(handle);
+		}
+	}
+	if (file_type == FILE_TYPE_CHAR)
 	{
 		if (color_mode)
 		{
-			CONSOLE_SCREEN_BUFFER_INFO info;
-			memset(&info, 0, sizeof(CONSOLE_SCREEN_BUFFER_INFO));
-			if (GetConsoleScreenBufferInfo(handle, &info))
-			{
-				const WORD bg_color = info.wAttributes & BACKGROUND_MASK;
-				if (SetConsoleTextAttribute(handle, bg_color | get_text_attributes(type)))
-				{
-					const BOOL result = WriteConsoleA(handle, text, (DWORD)strlen(text), &bytes_written, NULL);
-					SetConsoleTextAttribute(handle, info.wAttributes);
-					return result;
-				}
-			}
+			SetConsoleTextAttribute(handle, (default_attributes & BACKGROUND_MASK) | get_text_color(type));
+			WriteConsoleA(handle, text, (DWORD)strlen(text), &bytes_written, NULL);
+			SetConsoleTextAttribute(handle, default_attributes);
 		}
-		return WriteConsoleA(handle, text, (DWORD)strlen(text), &bytes_written, NULL);
+		else
+		{
+			WriteConsoleA(handle, text, (DWORD)strlen(text), &bytes_written, NULL);
+		}
 	}
 	else
 	{
-		const BOOL result = WriteFile(handle, text, (DWORD)strlen(text), &bytes_written, NULL);
-		if (result)
-		{
-			FlushFileBuffers(handle);
-		}
-		return result;
+		WriteFile(handle, text, (DWORD)strlen(text), &bytes_written, NULL);
 	}
 }
 
-static inline BOOL fprint_msg(const msgtype_t type, const char* const format, ...)
+static inline void fprint_msg(const msgtype_t type, const char* const format, ...)
 {
 	char buffer[MAX_PATH];
 	va_list ap;
 	va_start(ap, format);
-	_vsnprintf(buffer, MAX_PATH, format, ap);
-	buffer[MAX_PATH - 1U] = '\0';
+	VSNPRINTF(buffer, MAX_PATH, format, ap);
 	va_end(ap);
-	return print_msg(type, buffer);
+	print_msg(type, buffer);
 }
 
 static inline void DBG_print_chunk(const SIZE_T index, const SIZE_T size, const PVOID* const addr)
 {
 	char buffer[64U];
-	_snprintf(buffer, 64U, "[Memchkr] Memory: %04llX - %09llu - 0x%016llX\n", index, size, (ULONG_PTR)addr);
-	buffer[63U] = '\0';
+	SNPRINTF(buffer, 64U, "[Memchkr] Memory: %04llX - %09llu - 0x%016llX\n", index, size, (ULONG_PTR)addr);
 	OutputDebugStringA(buffer);
 }
 
 static inline void DBG_print_digest(const SIZE_T index, const BYTE* const digest, const BOOL read_mode)
 {
 	char buffer[64U];
-	_snprintf(buffer, 64U, "[Memchkr] Digest: %04llX - %s:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\n",
+	SNPRINTF(buffer, 64U, "[Memchkr] Digest: %04llX - %s:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\n",
 		index, read_mode ? "RD" : "WR",
 		digest[0U], digest[1U], digest[ 2U], digest[ 3U], digest[ 4U], digest[ 5U], digest[ 6U], digest[ 7U],
 		digest[8U], digest[9U], digest[10U], digest[11U], digest[12U], digest[13U], digest[14U], digest[15U]);
-	buffer[63U] = '\0';
 	OutputDebugStringA(buffer);
 }
 
