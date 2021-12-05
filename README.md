@@ -75,7 +75,7 @@ Returns exit code **`0`** if and only if the test has completed without any erro
 Algorithm
 =========
 
-First of all, the *Memory Checker* allocates the specified amount of memory to be tested. By default, *92%* of the computer's total physical memory will be tested.
+First of all, the *Memory Checker* allocates the specified amount of memory to be tested. By default, *90%* of the computer's total physical memory will be tested.
 
 All allocated memory pages are “locked” (pinned) in the physical memory, so that they can **not** swapped out to the disk during the test.
 

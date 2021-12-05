@@ -631,7 +631,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 	if ((!target_memory) || percent_mode)
 	{
-		const double fraction = percent_mode ? (bound(1U, target_memory, 100U) / 100.0) : 0.92;
+		const double fraction = percent_mode ? (bound(1U, target_memory, 100U) / 100.0) : 0.9;
 		target_memory = (SIZE_T) round(phys_memory.total * fraction);
 	}
 	else
