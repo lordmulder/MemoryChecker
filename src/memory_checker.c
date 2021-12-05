@@ -53,8 +53,6 @@ while(0)
 } \
 while(0)
 
-#define TICKS_PER_SECOND 10000000.0
-
 /* ====================================================================== */
 /* Typedefs                                                               */
 /* ====================================================================== */
@@ -136,11 +134,24 @@ static SIZE_T get_cpu_count()
 	return info.dwNumberOfProcessors;
 }
 
-static inline ULONG64 query_clock()
+static inline ULONG64 get_performance_frequency()
 {
-	FILETIME filetime;
-	GetSystemTimeAsFileTime(&filetime);
-	return (((ULONG64)filetime.dwHighDateTime) << 32) | ((ULONG64)filetime.dwLowDateTime);
+	LARGE_INTEGER value;
+	if (QueryPerformanceFrequency(&value))
+	{
+		return value.QuadPart;
+	}
+	return 1U;
+}
+
+static inline ULONG64 query_performance_counter()
+{
+	LARGE_INTEGER value;
+	if (QueryPerformanceCounter(&value))
+	{
+		return value.QuadPart;
+	}
+	return 0U;
 }
 
 static BOOL set_process_priority(const BOOL high_priority)
@@ -482,7 +493,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	int exit_code = EXIT_FAILURE, arg_offset = 1;
 	SIZE_T target_memory = 0U, allocated_memory = 0U, page_size = 0U;
 	SIZE_T chunk_size = 0U, working_set_size = 0U, pass = 0U, chunk_idx = 0U, thread_idx = 0U;
-	ULONG64 clock_total[2U] = { 0L, 0L }, clock_pass = 0L;
+	ULONG64 clock_frequency = 1U, clock_total[2U] = { 0U, 0U }, clock_pass[2U] = { 0U, 0U };
 	BOOL batch_mode = FALSE, continuous_mode = FALSE, percent_mode = FALSE, high_priority = FALSE;
 	meminfo_t phys_memory;
 	HANDLE thread[MAX_THREAD];
@@ -583,11 +594,12 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		}
 	}
 
-	clock_total[0U] = query_clock();
-
 	/* ----------------------------------------------------- */
 	/* Get system properties                                 */
 	/* ----------------------------------------------------- */
+
+	clock_frequency = get_performance_frequency();
+	clock_total[0U] = query_performance_counter();
 
 	if (!(page_size = get_page_size()))
 	{
@@ -749,7 +761,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			fprint_msg(MSGTYPE_HDR, "--- [ Testing pass %llu ] ---\n\n", pass + 1U);
 		}
 
-		clock_pass = query_clock();
+		clock_pass[0U] = query_performance_counter();
 
 		/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 		/* Fill memory                               */
@@ -897,7 +909,8 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			print_msg(MSGTYPE_WRN, "WARNING: Completed memory counter does not match total allocated memory!\n\n");
 		}
 
-		fprint_msg(MSGTYPE_NFO, "Pass completed after %.1f seconds.\n\n", (query_clock() - clock_pass) / TICKS_PER_SECOND);
+		clock_pass[1U] = query_performance_counter();
+		fprint_msg(MSGTYPE_NFO, "Pass completed after %.2f seconds.\n\n", (clock_pass[1U] - clock_pass[0U]) / ((double)clock_frequency));
 	}
 
 	/* ----------------------------------------------------- */
@@ -911,7 +924,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 cleanup:
 
-	clock_total[1U] = query_clock();
+	clock_total[1U] = query_performance_counter();
 
 	print_msg(MSGTYPE_NFO, "Cleaning up... ");
 
@@ -925,7 +938,7 @@ cleanup:
 		current_chunk->addr = NULL;
 	}
 
-	fprint_msg(MSGTYPE_NFO, "Goodbye!\n\nTest run completed after %.1f seconds.\n\n", (clock_total[1U] - clock_total[0U]) / TICKS_PER_SECOND);
+	fprint_msg(MSGTYPE_NFO, "Goodbye!\n\nTest run completed after %.2f seconds.\n\n", (clock_total[1U] - clock_total[0U]) / ((double)clock_frequency));
 
 	if (!(batch_mode || stop))
 	{
