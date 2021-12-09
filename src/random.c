@@ -9,13 +9,14 @@
 #include <stdlib.h>
 #include "random.h"
 
+#define BOOLIFY(X) (!(!(X)))
 #define ASSERT(X) do { if(!(X)) abort(); } while(0)
 #define RtlGenRandom SystemFunction036
-BOOLEAN WINAPI RtlGenRandom(PVOID, ULONG);
+DECLSPEC_IMPORT BOOLEAN WINAPI RtlGenRandom(PVOID buffer, ULONG len);
 
-void random_seed(rand_state_t *const state)
+BOOL random_seed(rand_state_t *const state)
 {
-	RtlGenRandom(state, sizeof(rand_state_t));
+	return BOOLIFY(RtlGenRandom(state, sizeof(rand_state_t)));
 }
 
 ULONG32 random_next(rand_state_t *const state)
@@ -29,13 +30,12 @@ ULONG32 random_next(rand_state_t *const state)
 	return (state->d += 0x000587C5) + state->v;
 }
 
-void random_bytes(rand_state_t *const state, BYTE* buffer, SIZE_T size)
+void random_bytes(rand_state_t *const state, BYTE *buffer, SIZE_T size)
 {
 	ASSERT((size % sizeof(ULONG32)) == 0U);
-	while (size > 0U)
+	BYTE *const limit = buffer + size;
+	for (; buffer < limit; buffer += sizeof(ULONG32))
 	{
 		*((ULONG32*)buffer) = random_next(state);
-		size -= sizeof(ULONG32);
-		buffer += sizeof(ULONG32);
 	}
 }

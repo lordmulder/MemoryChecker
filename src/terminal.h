@@ -12,17 +12,19 @@
 
 typedef enum
 {
-	MSGTYPE_NFO = 0,
-	MSGTYPE_HDR = 1,
-	MSGTYPE_PRG = 2,
-	MSGTYPE_WRN = 4,
-	MSGTYPE_ERR = 8,
-	MSGTYPE_FIN = 16
+	MSGTYPE_WHT = 0x01,   /*white*/
+	MSGTYPE_CYN = 0x02,   /*cyan*/
+	MSGTYPE_MAG = 0x04,   /*magenta*/
+	MSGTYPE_YLW = 0x08,   /*yekkiw*/
+	MSGTYPE_RED = 0x10,   /*red*/
+	MSGTYPE_GRN = 0x20    /*green*/
 }
 msgtype_t;
 
 void term_init(void);
 void term_exit(void);
+
+void term_enable_colors(const BOOL enable);
 
 void term_puts(const msgtype_t type, const char *const text);
 void term_printf(const msgtype_t type, const char *const format, ...);

@@ -17,11 +17,11 @@
 
 static volatile LONG reference_counter = 0L;
 static CRITICAL_SECTION mutex;
-static BOOL color_mode = TRUE;
 static HANDLE handle = INVALID_HANDLE_VALUE;
 static DWORD file_type = FILE_TYPE_UNKNOWN;
 static WORD default_attributes = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
 static UINT default_cp = UINT_MAX;
+static BOOL color_mode = FALSE;
 static char buffer_utf8[BUFFER_SIZE];
 static wchar_t buffer_utf16[MAX_CHARS];
 
@@ -45,6 +45,8 @@ while(0)
 } \
 while(0)
 
+#define BOOLIFY(X) (!(!(X)))
+
 /* ====================================================================== */
 /* Static functions                                                       */
 /* ====================================================================== */
@@ -64,15 +66,15 @@ static inline WORD get_text_color(const msgtype_t type)
 {
 	switch (type)
 	{
-	case MSGTYPE_HDR:
+	case MSGTYPE_CYN:
 		return FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
-	case MSGTYPE_PRG:
+	case MSGTYPE_MAG:
 		return FOREGROUND_RED | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
-	case MSGTYPE_WRN:
+	case MSGTYPE_YLW:
 		return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY;
-	case MSGTYPE_ERR:
+	case MSGTYPE_RED:
 		return FOREGROUND_RED | FOREGROUND_INTENSITY;
-	case MSGTYPE_FIN:
+	case MSGTYPE_GRN:
 		return FOREGROUND_GREEN | FOREGROUND_INTENSITY | FOREGROUND_INTENSITY;
 	default:
 		return FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE | FOREGROUND_INTENSITY;
@@ -128,7 +130,10 @@ void term_init(void)
 {
 	if (InterlockedIncrement(&reference_counter) == 1L)
 	{
-		InitializeCriticalSection(&mutex);
+		if (!InitializeCriticalSectionAndSpinCount(&mutex, 0x00000400))
+		{
+			abort(); /*system error*/
+		}
 		if ((file_type = GetFileType(handle = GetStdHandle(STD_OUTPUT_HANDLE))) == FILE_TYPE_CHAR)
 		{
 			default_cp = GetConsoleOutputCP();
@@ -136,6 +141,13 @@ void term_init(void)
 			SetConsoleOutputCP(CP_UTF8);
 		}
 	}
+}
+
+void term_enable_colors(const BOOL enable)
+{
+	EnterCriticalSection(&mutex);
+	color_mode = BOOLIFY(enable);
+	LeaveCriticalSection(&mutex);
 }
 
 void term_puts(const msgtype_t type, const char *const text)
@@ -176,9 +188,14 @@ void term_wprintf(const msgtype_t type, const wchar_t *const format, ...)
 
 void term_exit(void)
 {
-	if (InterlockedDecrement(&reference_counter) == 0L)
+	const LONG counter = InterlockedDecrement(&reference_counter);
+	if (counter < 0L)
 	{
-		if ((handle != INVALID_HANDLE_VALUE) && (file_type == FILE_TYPE_CHAR))
+		abort(); /*This is not supposed to happen!*/
+	}
+	else if (counter == 0L)
+	{
+		if (file_type == FILE_TYPE_CHAR)
 		{
 			SetConsoleTextAttribute(handle, default_attributes);
 			if (default_cp != UINT_MAX)

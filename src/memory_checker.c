@@ -233,8 +233,8 @@ static inline SIZE_T round_up(const SIZE_T number, const SIZE_T multiple)
 
 static void print_app_logo(void)
 {
-	term_printf(MSGTYPE_HDR, "Memory Checker v%u.%02u-%u [%s], by LoRd_MuldeR <MuldeR2@GMX.de>\n", MEMCK_VERSION_MAJOR, (10U * MEMCK_VERSION_MINOR_HI) + MEMCK_VERSION_MINOR_LO, MEMCK_VERSION_PATCH, BUILD_DATE);
-	term_puts(MSGTYPE_HDR, "This work has been released under the CC0 1.0 Universal license!\n\n");
+	term_printf(MSGTYPE_CYN, "Memory Checker v%u.%02u-%u [%s], by LoRd_MuldeR <MuldeR2@GMX.de>\n", MEMCK_VERSION_MAJOR, (10U * MEMCK_VERSION_MINOR_HI) + MEMCK_VERSION_MINOR_LO, MEMCK_VERSION_PATCH, BUILD_DATE);
+	term_puts(MSGTYPE_CYN, "This work has been released under the CC0 1.0 Universal license!\n\n");
 }
 
 static BOOL WINAPI console_ctrl_handler(const DWORD ctrl_type)
@@ -267,14 +267,17 @@ static LONG unhandled_exception_filter(const PEXCEPTION_POINTERS ex_info)
 /* Threads                                                                */
 /* ====================================================================== */
 
-static UINT32 thread_fill_run(const SIZE_T id)
+static UINT32 thread_fill_loop(const SIZE_T id)
 {
 	md5_ctx_t md5_ctx;
 	rand_state_t rand_state;
 	SIZE_T chunk_idx, upd_counter = 0U;
 	BYTE temp[RW_BUFSIZE];
 
-	random_seed(&rand_state);
+	if (!random_seed(&rand_state))
+	{
+		return EXIT_FAILURE;
+	}
 
 	for (chunk_idx = id; (!stop) && (chunk_idx < num_chunks); chunk_idx += num_threads)
 	{
@@ -306,7 +309,7 @@ static UINT32 thread_fill_run(const SIZE_T id)
 	return stop ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
-static UINT32 thread_check_run(const SIZE_T id)
+static UINT32 thread_check_loop(const SIZE_T id)
 {
 	md5_ctx_t md5_ctx;
 	SIZE_T chunk_idx, upd_counter = 0U;
@@ -351,14 +354,14 @@ static UINT32 thread_fill(void* const arg)
 #ifdef _MSC_VER
 	__try
 	{
-		ret = thread_fill_run((SIZE_T)((UINT_PTR)arg));
+		ret = thread_fill_loop((SIZE_T)((UINT_PTR)arg));
 	}
 	__except (1)
 	{
 		exception_handler(GetExceptionCode());
 	}
 #else
-	ret = thread_fill_run((SIZE_T)((UINT_PTR)arg));
+	ret = thread_fill_loop((SIZE_T)((UINT_PTR)arg));
 #endif
 	return ret;
 }
@@ -369,14 +372,14 @@ static UINT32 thread_check(void* const arg)
 #ifdef _MSC_VER
 	__try
 	{
-		ret = thread_check_run((SIZE_T)((UINT_PTR)arg));
+		ret = thread_check_loop((SIZE_T)((UINT_PTR)arg));
 	}
 	__except (1)
 	{
 		exception_handler(GetExceptionCode());
 	}
 #else
-	ret = thread_check_run((SIZE_T)((UINT_PTR)arg));
+	ret = thread_check_loop((SIZE_T)((UINT_PTR)arg));
 #endif
 	return ret;
 }
@@ -407,9 +410,9 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		if ((!_wcsicmp(argv[arg_offset], L"-h")) || (!_wcsicmp(argv[arg_offset], L"/?")) || (!_wcsicmp(argv[arg_offset], L"-?")) || (!_wcsicmp(argv[arg_offset], L"--help")))
 		{
 			print_app_logo();
-			term_puts(MSGTYPE_NFO, "Usage:\n");
-			term_puts(MSGTYPE_NFO, "  MemoryChecker.exe [--batch] [--continuous] [<target_memory_size>[%]] [<threads>]\n\n");
-			term_puts(MSGTYPE_NFO, "Default memory size to test is ~95% of the total physical memory.\n\n");
+			term_puts(MSGTYPE_WHT, "Usage:\n");
+			term_puts(MSGTYPE_WHT, "  MemoryChecker.exe [--batch] [--continuous] [<target_memory_size>[%]] [<threads>]\n\n");
+			term_puts(MSGTYPE_WHT, "Default memory size to test is ~95% of the total physical memory.\n\n");
 			return EXIT_SUCCESS;
 		}
 		if ((argv[arg_offset][0U] == L'-') && (argv[arg_offset][1U] == L'-'))
@@ -442,22 +445,23 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 					high_priority = TRUE;
 					continue;
 				}
+				term_enable_colors(color_mode);
 				print_app_logo();
-				term_printf(MSGTYPE_ERR, "The specified option is unknown: \"--%S\"\n\n", option);
+				term_printf(MSGTYPE_RED, "The specified option is unknown: \"--%S\"\n\n", option);
 				return EXIT_FAILURE;
 			}
 		}
 		break;
 	}
 
+	term_enable_colors(color_mode);
+	print_app_logo();
+
 	if (read_envvar(L"MEMCHCK_PASSES", &num_passes) < 0L)
 	{
-		print_app_logo();
-		term_puts(MSGTYPE_ERR, "Number of passes specified in environment variable MEMCHCK_PASSES is invalid!\n\n");
+		term_puts(MSGTYPE_RED, "Number of passes specified in environment variable MEMCHCK_PASSES is invalid!\n\n");
 		return EXIT_FAILURE;
 	}
-
-	print_app_logo(); /*always print the logo at this point*/
 
 	if (arg_offset < argc)
 	{
@@ -466,7 +470,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		target_memory = wcstoull(value, &end_ptr, 10);
 		if ((!target_memory) || (end_ptr && (*end_ptr != L'%') && (*end_ptr != L'\0')))
 		{
-			term_printf(MSGTYPE_ERR, "The specified target memory size is invalid: \"%S\"\n\n", value);
+			term_printf(MSGTYPE_RED, "The specified target memory size is invalid: \"%S\"\n\n", value);
 			return EXIT_FAILURE;
 		}
 		if (end_ptr && (*end_ptr == L'%'))
@@ -474,7 +478,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			percent_mode = TRUE;
 			if (target_memory > 100U)
 			{
-				term_puts(MSGTYPE_ERR, "Error: Cannot allocated more than 100% of the total physical memory!\n\n");
+				term_puts(MSGTYPE_RED, "Error: Cannot allocated more than 100% of the total physical memory!\n\n");
 				return EXIT_FAILURE;
 			}
 		}
@@ -487,7 +491,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		num_threads = wcstoull(value, &end_ptr, 10);
 		if ((!num_threads) || (end_ptr && (*end_ptr != L'\0')))
 		{
-			term_printf(MSGTYPE_ERR, "The specified thread count is invalid: \"%S\"\n\n", value);
+			term_printf(MSGTYPE_RED, "The specified thread count is invalid: \"%S\"\n\n", value);
 			return EXIT_FAILURE;
 		}
 	}
@@ -501,29 +505,29 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 	if (!(page_size = get_page_size()))
 	{
-		term_puts(MSGTYPE_ERR, "System error: Failed to determine page size!\n\n");
+		term_puts(MSGTYPE_RED, "System error: Failed to determine page size!\n\n");
 		goto cleanup;
 	}
 
 	if ((page_size % RW_BUFSIZE) != 0)
 	{
-		term_printf(MSGTYPE_ERR, "System error: Page size is *not* a multiple of %llu bytes!\n\n", RW_BUFSIZE);
+		term_printf(MSGTYPE_RED, "System error: Page size is *not* a multiple of %llu bytes!\n\n", RW_BUFSIZE);
 		goto cleanup;
 	}
 
 	phys_memory = get_physical_memory_size();
 	if ((phys_memory.total < 1U) || (phys_memory.avail < 1U))
 	{
-		term_puts(MSGTYPE_ERR, "System error: Failed to determine physical memory size!\n\n");
+		term_puts(MSGTYPE_RED, "System error: Failed to determine physical memory size!\n\n");
 		goto cleanup;
 	}
 
-	term_printf(MSGTYPE_NFO, "Total physical memory : %012llu (0x%010llX)\n", phys_memory.total, phys_memory.total);
-	term_printf(MSGTYPE_NFO, "Avail physical memory : %012llu (0x%010llX)\n", phys_memory.avail, phys_memory.avail);
+	term_printf(MSGTYPE_WHT, "Total physical memory : %012llu (0x%010llX)\n", phys_memory.total, phys_memory.total);
+	term_printf(MSGTYPE_WHT, "Avail physical memory : %012llu (0x%010llX)\n", phys_memory.avail, phys_memory.avail);
 
 	if (phys_memory.total <= MIN_MEMORY)
 	{
-		term_puts(MSGTYPE_ERR, "\nError: Sorry, not enough physical memory!\n\n");
+		term_puts(MSGTYPE_RED, "\nError: Sorry, not enough physical memory!\n\n");
 		goto cleanup;
 	}
 
@@ -536,13 +540,13 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	{
 		if (target_memory > phys_memory.total)
 		{
-			term_puts(MSGTYPE_ERR, "\nError: Specified memory size exceeds the total physical memory size!\n\n");
+			term_puts(MSGTYPE_RED, "\nError: Specified memory size exceeds the total physical memory size!\n\n");
 			goto cleanup;
 		}
 	}
 
 	target_memory = round_up(target_memory, page_size);
-	term_printf(MSGTYPE_NFO, "Check physical memory : %012llu (0x%010llX)\n\n", target_memory, target_memory);
+	term_printf(MSGTYPE_WHT, "Check physical memory : %012llu (0x%010llX)\n\n", target_memory, target_memory);
 
 	if (!num_threads)
 	{
@@ -552,12 +556,12 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	{
 		if (num_threads > MAX_THREAD)
 		{
-			term_puts(MSGTYPE_ERR, "Error: Specified number of threads exceeds allowable maximum!\n\n");
+			term_puts(MSGTYPE_RED, "Error: Specified number of threads exceeds allowable maximum!\n\n");
 			goto cleanup;
 		}
 	}
 
-	term_printf(MSGTYPE_NFO, "Threads count : %llu\n\n", num_threads);
+	term_printf(MSGTYPE_WHT, "Threads count : %llu\n\n", num_threads);
 
 	if (set_process_priority(high_priority))
 	{
@@ -565,7 +569,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	}
 	else
 	{
-		term_puts(MSGTYPE_WRN, "WARNING: Failed to adjust process priority class!\n\n");
+		term_puts(MSGTYPE_YLW, "WARNING: Failed to adjust process priority class!\n\n");
 	}
 
 	/* ----------------------------------------------------- */
@@ -575,11 +579,11 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	working_set_size = target_memory + ((IsWindowsVistaOrGreater() ? 128U : 4096U) * page_size);
 	if (!SetProcessWorkingSetSize(GetCurrentProcess(), working_set_size, working_set_size))
 	{
-		term_puts(MSGTYPE_WRN, "WARNING: Failed to set working set size. Memory allocation is probably going to fail!\n\n");
+		term_puts(MSGTYPE_YLW, "WARNING: Failed to set working set size. Memory allocation is probably going to fail!\n\n");
 	}
 
-	term_puts(MSGTYPE_NFO, "Allocating memory, please be patient, this will take a while...\n");
-	term_puts(MSGTYPE_PRG, "0.0%");
+	term_puts(MSGTYPE_WHT, "Allocating memory, please be patient, this will take a while...\n");
+	term_puts(MSGTYPE_MAG, "0.0%");
 	set_console_progress(0, continuous_mode ? 0U : num_passes, 0.0);
 
 	SecureZeroMemory(CHUNKS, sizeof(chunk_t) * MAX_CHUNKS);
@@ -601,7 +605,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 				remaining = (allocated_memory < target_memory) ? target_memory - allocated_memory : 0U;
 				retry_counter = 0U;
 				const double progress = 100.0 * ((double)allocated_memory / target_memory);
-				term_printf(MSGTYPE_PRG, "\r%.1f%%", progress);
+				term_printf(MSGTYPE_MAG, "\r%.1f%%", progress);
 				set_console_progress(0, continuous_mode ? 0U : num_passes, progress);
 				if (debug_mode)
 				{
@@ -622,19 +626,19 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 	if (stop)
 	{
-		term_puts(MSGTYPE_WRN, "\rInterrupted!\n\n");
+		term_puts(MSGTYPE_YLW, "\rInterrupted!\n\n");
 		goto cleanup;
 	}
 
-	term_printf(MSGTYPE_FIN, "\r%.1f%% [OK]\n\n", 100.0 * ((double)allocated_memory / target_memory));
+	term_printf(MSGTYPE_GRN, "\r%.1f%% [OK]\n\n", 100.0 * ((double)allocated_memory / target_memory));
 	set_console_progress(0, continuous_mode ? 0U : num_passes, 100.0);
 
-	term_printf(MSGTYPE_NFO, "Allocated memory : %012llu (0x%010llX)\n\n", allocated_memory, allocated_memory);
+	term_printf(MSGTYPE_WHT, "Allocated memory : %012llu (0x%010llX)\n\n", allocated_memory, allocated_memory);
 
 	if (allocated_memory < target_memory)
 	{
-		term_puts(MSGTYPE_ERR, "Error: Failed to allocate the requested amount of physical memory!\n\n");
-		term_puts(MSGTYPE_WRN, "NOTE: Please free up more physical memory or try again with a smaller target memory size.\n\n");
+		term_puts(MSGTYPE_RED, "Error: Failed to allocate the requested amount of physical memory!\n\n");
+		term_puts(MSGTYPE_YLW, "NOTE: Please free up more physical memory or try again with a smaller target memory size.\n\n");
 		goto cleanup;
 	}
 
@@ -646,11 +650,11 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	{
 		if (!continuous_mode)
 		{
-			term_printf(MSGTYPE_HDR, "--- [ Pass %llu of %llu ] ---\n\n", pass + 1U, (SIZE_T)num_passes);
+			term_printf(MSGTYPE_CYN, "--- [ Pass %llu of %llu ] ---\n\n", pass + 1U, (SIZE_T)num_passes);
 		}
 		else
 		{
-			term_printf(MSGTYPE_HDR, "--- [ Testing pass %llu ] ---\n\n", pass + 1U);
+			term_printf(MSGTYPE_CYN, "--- [ Testing pass %llu ] ---\n\n", pass + 1U);
 		}
 
 		clock_pass[0U] = query_performance_counter();
@@ -659,8 +663,8 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		/* Fill memory                               */
 		/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 
-		term_puts(MSGTYPE_NFO, "Writing memory, please be patient, this will take a while...\n");
-		term_puts(MSGTYPE_PRG, "0.0%");
+		term_puts(MSGTYPE_WHT, "Writing memory, please be patient, this will take a while...\n");
+		term_puts(MSGTYPE_MAG, "0.0%");
 		set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 0.0);
 
 		completed = 0LL;
@@ -670,8 +674,8 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			thread[thread_idx] = (HANDLE) _beginthreadex(NULL, 0, thread_fill, (PVOID)((UINT_PTR)thread_idx), 0U, NULL);
 			if (!thread[thread_idx])
 			{
-				term_puts(MSGTYPE_WRN, "\rFailed!\n\n");
-				term_puts(MSGTYPE_ERR, "System error: Thread creation has failed!\n\n");
+				term_puts(MSGTYPE_YLW, "\rFailed!\n\n");
+				term_puts(MSGTYPE_RED, "System error: Thread creation has failed!\n\n");
 				while (thread_idx > 0U)
 				{
 					TerminateThread(thread[--thread_idx], EXIT_FAILURE);
@@ -691,13 +695,13 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			else if (result == WAIT_TIMEOUT)
 			{
 				const double progress = 100.0 * ((double)completed / allocated_memory);
-				term_printf(MSGTYPE_PRG, "\r%.1f%%", progress);
+				term_printf(MSGTYPE_MAG, "\r%.1f%%", progress);
 				set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 0.5 * progress);
 			}
 			else
 			{
-				term_puts(MSGTYPE_WRN, "\rFailed!\n\n");
-				term_puts(MSGTYPE_ERR, "System error: Failed to wait for thread!\n\n");
+				term_puts(MSGTYPE_YLW, "\rFailed!\n\n");
+				term_puts(MSGTYPE_RED, "System error: Failed to wait for thread!\n\n");
 				goto cleanup;
 			}
 		}
@@ -713,23 +717,23 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		if (stop)
 		{
-			term_puts(MSGTYPE_WRN, "\rInterrupted!\n\n");
+			term_puts(MSGTYPE_YLW, "\rInterrupted!\n\n");
 			goto cleanup;
 		}
 
-		term_printf(MSGTYPE_FIN, "\r%.1f%% [OK]\n\n", 100.0);
+		term_printf(MSGTYPE_GRN, "\r%.1f%% [OK]\n\n", 100.0);
 
 		if ((SIZE_T)completed != allocated_memory)
 		{
-			term_puts(MSGTYPE_WRN, "WARNING: Completed memory counter does not match total allocated memory!\n\n");
+			term_puts(MSGTYPE_YLW, "WARNING: Completed memory counter does not match total allocated memory!\n\n");
 		}
 
 		/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 		/* Check memory                              */
 		/* ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ */
 
-		term_puts(MSGTYPE_NFO, "Reading memory, please be patient, this will take a while...\n");
-		term_puts(MSGTYPE_PRG, "0.0%");
+		term_puts(MSGTYPE_WHT, "Reading memory, please be patient, this will take a while...\n");
+		term_puts(MSGTYPE_MAG, "0.0%");
 		set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 50.0);
 
 		completed = 0LL;
@@ -739,8 +743,8 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			thread[thread_idx] = (HANDLE)_beginthreadex(NULL, 0, thread_check, (PVOID)((UINT_PTR)thread_idx), 0U, NULL);
 			if (!thread[thread_idx])
 			{
-				term_puts(MSGTYPE_WRN, "\rFailed!\n\n");
-				term_puts(MSGTYPE_ERR, "System error: Thread creation has failed!\n\n");
+				term_puts(MSGTYPE_YLW, "\rFailed!\n\n");
+				term_puts(MSGTYPE_RED, "System error: Thread creation has failed!\n\n");
 				while (thread_idx > 0U)
 				{
 					TerminateThread(thread[--thread_idx], EXIT_FAILURE);
@@ -760,13 +764,13 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			else if (result == WAIT_TIMEOUT)
 			{
 				const double progress = 100.0 * ((double)completed / allocated_memory);
-				term_printf(MSGTYPE_PRG, "\r%.1f%%", progress);
+				term_printf(MSGTYPE_MAG, "\r%.1f%%", progress);
 				set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 50.0 + (0.5 * progress));
 			}
 			else
 			{
-				term_puts(MSGTYPE_WRN, "\rFailed!\n\n");
-				term_puts(MSGTYPE_ERR, "System error: Failed to wait for thread!\n\n");
+				term_puts(MSGTYPE_YLW, "\rFailed!\n\n");
+				term_puts(MSGTYPE_RED, "System error: Failed to wait for thread!\n\n");
 				goto cleanup;
 			}
 		}
@@ -782,35 +786,35 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		if (chk_error != 0LL)
 		{
-			term_puts(MSGTYPE_WRN, "\rFailed!\n\n");
-			term_printf(MSGTYPE_ERR, "Error: %lld hash check(s) have failed. Memory corrupted :-(\n\n", chk_error);
+			term_puts(MSGTYPE_YLW, "\rFailed!\n\n");
+			term_printf(MSGTYPE_RED, "Error: %lld hash check(s) have failed. Memory corrupted :-(\n\n", chk_error);
 			goto cleanup;
 		}
 
 		if (stop)
 		{
-			term_puts(MSGTYPE_WRN, "\rInterrupted!\n\n");
+			term_puts(MSGTYPE_YLW, "\rInterrupted!\n\n");
 			goto cleanup;
 		}
 
-		term_printf(MSGTYPE_FIN, "\r%.1f%% [OK]\n\n", 100.0);
+		term_printf(MSGTYPE_GRN, "\r%.1f%% [OK]\n\n", 100.0);
 		set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 100.0);
 
 		if ((SIZE_T)completed != allocated_memory)
 		{
-			term_puts(MSGTYPE_WRN, "WARNING: Completed memory counter does not match total allocated memory!\n\n");
+			term_puts(MSGTYPE_YLW, "WARNING: Completed memory counter does not match total allocated memory!\n\n");
 		}
 
 		clock_pass[1U] = query_performance_counter();
-		term_printf(MSGTYPE_NFO, "Pass completed after %.2f seconds.\n\n", (clock_pass[1U] - clock_pass[0U]) / ((double)clock_frequency));
+		term_printf(MSGTYPE_WHT, "Pass completed after %.2f seconds.\n\n", (clock_pass[1U] - clock_pass[0U]) / ((double)clock_frequency));
 	}
 
 	/* ----------------------------------------------------- */
 	/* Clean-up                                              */
 	/* ----------------------------------------------------- */
 
-	term_puts(MSGTYPE_HDR, "--- [ Completed ] ---\n\n");
-	term_puts(MSGTYPE_FIN, "No errors have been detected during the test :-)\n\n");
+	term_puts(MSGTYPE_CYN, "--- [ Completed ] ---\n\n");
+	term_puts(MSGTYPE_GRN, "No errors have been detected during the test :-)\n\n");
 	
 	exit_code = EXIT_SUCCESS;
 
@@ -818,7 +822,7 @@ cleanup:
 
 	clock_total[1U] = query_performance_counter();
 
-	term_puts(MSGTYPE_NFO, "Cleaning up... ");
+	term_puts(MSGTYPE_WHT, "Cleaning up... ");
 
 	for (chunk_idx = 0U; chunk_idx < num_chunks; ++chunk_idx)
 	{
@@ -830,14 +834,14 @@ cleanup:
 		current_chunk->addr = NULL;
 	}
 
-	term_printf(MSGTYPE_NFO, "Goodbye!\n\nTest run completed after %.2f seconds.\n\n", (clock_total[1U] - clock_total[0U]) / ((double)clock_frequency));
-	term_exit();
+	term_printf(MSGTYPE_WHT, "Goodbye!\n\nTest run completed after %.2f seconds.\n\n", (clock_total[1U] - clock_total[0U]) / ((double)clock_frequency));
 
 	if (!(batch_mode || stop))
 	{
 		system("pause"); /*prevent terminal from closing*/
 	}
 
+	term_exit();
 	return exit_code;
 }
 
