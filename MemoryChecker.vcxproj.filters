@@ -24,6 +24,9 @@
     <ClInclude Include="src\random.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\terminal.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\memory_checker.c">
@@ -33,6 +36,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="src\random.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\terminal.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
