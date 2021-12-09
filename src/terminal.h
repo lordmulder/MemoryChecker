@@ -24,6 +24,9 @@ msgtype_t;
 void term_init(void);
 void term_exit(void);
 
+void term_title_wset(const wchar_t *const text);
+void term_title_wsetf(const wchar_t *const format, ...);
+
 void term_enable_colors(const BOOL enable);
 
 void term_puts(const msgtype_t type, const char *const text);
@@ -31,5 +34,8 @@ void term_printf(const msgtype_t type, const char *const format, ...);
 
 void term_putws(const msgtype_t type, const wchar_t *const text);
 void term_wprintf(const msgtype_t type, const wchar_t *const format, ...);
+
+void dbg_puts(const char* const text);
+void dbg_printf(const char* const format, ...);
 
 #endif

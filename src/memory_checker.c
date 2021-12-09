@@ -16,8 +16,8 @@
 #include <wchar.h>
 #include <math.h>
 #include <process.h>
-#include "random.h"
 #include "terminal.h"
+#include "random.h"
 #include "md5.h"
 #include "version.h"
 
@@ -26,24 +26,6 @@
 #define MIN_MEMORY (512U * 1024U * 1024U)
 #define RW_BUFSIZE ((SIZE_T)16U)
 #define UPDATE_INT 997U
-
-/* ====================================================================== */
-/* Macros                                                                 */
-/* ====================================================================== */
-
-#define SNPRINTF(BUFFER, COUNT, FORMAT, ...) do \
-{ \
-	_snprintf((BUFFER), (COUNT), (FORMAT), __VA_ARGS__); \
-	BUFFER[(COUNT) - 1U] = '\0'; \
-} \
-while(0)
-
-#define SNWPRINTF(BUFFER, COUNT, FORMAT, ...) do \
-{ \
-	_snwprintf((BUFFER), (COUNT), (FORMAT), __VA_ARGS__); \
-	BUFFER[(COUNT) - 1U] = '\0'; \
-} \
-while(0)
 
 /* ====================================================================== */
 /* Typedefs                                                               */
@@ -84,6 +66,32 @@ static volatile BOOL debug_mode = FALSE, color_mode = TRUE, stop = FALSE;
 /* ====================================================================== */
 /* Utility Functions                                                      */
 /* ====================================================================== */
+
+static BOOL WINAPI console_ctrl_handler(const DWORD ctrl_type)
+{
+	switch (ctrl_type)
+	{
+	case CTRL_C_EVENT:
+	case CTRL_BREAK_EVENT:
+	case CTRL_CLOSE_EVENT:
+		stop = TRUE;
+		return TRUE;
+	default:
+		return FALSE;
+	}
+}
+
+static void exception_handler(const DWORD ex_code)
+{
+	fprintf(stderr, "\n\nEXCEPTION: Something went seriously wrong! (Exception code: 0x%08lX)\n\n", ex_code);
+	_Exit(-1);
+}
+
+static LONG unhandled_exception_filter(const PEXCEPTION_POINTERS ex_info)
+{
+	exception_handler(ex_info->ExceptionRecord->ExceptionCode);
+	return 0L;
+}
 
 static meminfo_t get_physical_memory_size()
 {
@@ -174,35 +182,29 @@ static LONG read_envvar(const wchar_t *const name, ULONG64 *const value)
 	}
 }
 
-static void set_console_progress(const SIZE_T pass, const SIZE_T total, const double progress)
+static void update_progress(const SIZE_T pass, const SIZE_T total, const double progress)
 {
-	wchar_t buffer[64U];
 	if (total > 0U)
 	{
-		SNWPRINTF(buffer, 64U, L"[%llu/%llu] %.1f%% - Memory Checker", pass, total, progress);
+		term_title_wsetf(L"[%llu/%llu] %.1f%% - Memory Checker", pass, total, progress);
 	}
 	else
 	{
-		SNWPRINTF(buffer, 64U, L"[%llu/\u221E] %.1f%% - Memory Checker", pass, progress);
+		term_title_wsetf(L"[%llu/\u221E] %.1f%% - Memory Checker", pass, progress);
 	}
-	SetConsoleTitleW(buffer);
 }
 
-static inline void DBG_print_chunk(const SIZE_T index, const SIZE_T size, const PVOID* const addr)
+static inline void debug_chunk(const SIZE_T index, const SIZE_T size, const PVOID* const addr)
 {
-	char buffer[64U];
-	SNPRINTF(buffer, 64U, "[Memchkr] Memory: %04llX - %09llu - 0x%016llX\n", index, size, (ULONG_PTR)addr);
-	OutputDebugStringA(buffer);
+	dbg_printf("[Memchkr] Memory: %04llX - %09llu - 0x%016llX\n", index, size, (ULONG_PTR)addr);
 }
 
-static inline void DBG_print_digest(const SIZE_T index, const BYTE* const digest, const BOOL read_mode)
+static inline void debug_digest(const SIZE_T index, const BYTE* const digest, const BOOL read_mode)
 {
-	char buffer[64U];
-	SNPRINTF(buffer, 64U, "[Memchkr] Digest: %04llX - %s:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\n",
+	dbg_printf("[Memchkr] Digest: %04llX - %s:%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X\n",
 		index, read_mode ? "RD" : "WR",
 		digest[0U], digest[1U], digest[ 2U], digest[ 3U], digest[ 4U], digest[ 5U], digest[ 6U], digest[ 7U],
 		digest[8U], digest[9U], digest[10U], digest[11U], digest[12U], digest[13U], digest[14U], digest[15U]);
-	OutputDebugStringA(buffer);
 }
 
 static inline SIZE_T get_max(const SIZE_T a, const SIZE_T b)
@@ -231,36 +233,10 @@ static inline SIZE_T round_up(const SIZE_T number, const SIZE_T multiple)
 	return number;
 }
 
-static void print_app_logo(void)
+static inline void print_app_logo(void)
 {
 	term_printf(MSGTYPE_CYN, "Memory Checker v%u.%02u-%u [%s], by LoRd_MuldeR <MuldeR2@GMX.de>\n", MEMCK_VERSION_MAJOR, (10U * MEMCK_VERSION_MINOR_HI) + MEMCK_VERSION_MINOR_LO, MEMCK_VERSION_PATCH, BUILD_DATE);
 	term_puts(MSGTYPE_CYN, "This work has been released under the CC0 1.0 Universal license!\n\n");
-}
-
-static BOOL WINAPI console_ctrl_handler(const DWORD ctrl_type)
-{
-	switch (ctrl_type)
-	{
-	case CTRL_C_EVENT:
-	case CTRL_BREAK_EVENT:
-	case CTRL_CLOSE_EVENT:
-		stop = TRUE;
-		return TRUE;
-	default:
-		return FALSE;
-	}
-}
-
-static void exception_handler(const DWORD ex_code)
-{
-	fprintf(stderr, "\n\nEXCEPTION: Something went seriously wrong! (Exception code: 0x%08lX)\n\n", ex_code);
-	_Exit(-1);
-}
-
-static LONG unhandled_exception_filter(const PEXCEPTION_POINTERS ex_info)
-{
-	exception_handler(ex_info->ExceptionRecord->ExceptionCode);
-	return 0L;
 }
 
 /* ====================================================================== */
@@ -297,7 +273,7 @@ static UINT32 thread_fill_loop(const SIZE_T id)
 		md5_final(&md5_ctx, DIGEST[chunk_idx]);
 		if (debug_mode)
 		{
-			DBG_print_digest(chunk_idx, DIGEST[chunk_idx], FALSE);
+			debug_digest(chunk_idx, DIGEST[chunk_idx], FALSE);
 		}
 	}
 
@@ -332,7 +308,7 @@ static UINT32 thread_check_loop(const SIZE_T id)
 		md5_final(&md5_ctx, digest);
 		if (debug_mode)
 		{
-			DBG_print_digest(chunk_idx, digest, TRUE);
+			debug_digest(chunk_idx, digest, TRUE);
 		}
 		if (memcmp(digest, DIGEST[chunk_idx], MD5_HASH_SIZE) != 0)
 		{
@@ -399,7 +375,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	HANDLE thread[MAX_THREAD];
 
 	term_init();
-	SetConsoleTitleW(L"Memory Checker");
+	term_title_wset(L"Memory Checker");
 
 	/* ----------------------------------------------------- */
 	/* Parse parameters                                      */
@@ -584,7 +560,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 	term_puts(MSGTYPE_WHT, "Allocating memory, please be patient, this will take a while...\n");
 	term_puts(MSGTYPE_MAG, "0.0%");
-	set_console_progress(0, continuous_mode ? 0U : num_passes, 0.0);
+	update_progress(0, continuous_mode ? 0U : num_passes, 0.0);
 
 	SecureZeroMemory(CHUNKS, sizeof(chunk_t) * MAX_CHUNKS);
 	chunk_size = round_up(128U * 1024U * 1024U, page_size);
@@ -606,10 +582,10 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 				retry_counter = 0U;
 				const double progress = 100.0 * ((double)allocated_memory / target_memory);
 				term_printf(MSGTYPE_MAG, "\r%.1f%%", progress);
-				set_console_progress(0, continuous_mode ? 0U : num_passes, progress);
+				update_progress(0, continuous_mode ? 0U : num_passes, progress);
 				if (debug_mode)
 				{
-					DBG_print_chunk(num_chunks - 1U, chunk_size, addr);
+					debug_chunk(num_chunks - 1U, chunk_size, addr);
 				}
 			}
 			else
@@ -631,7 +607,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	}
 
 	term_printf(MSGTYPE_GRN, "\r%.1f%% [OK]\n\n", 100.0 * ((double)allocated_memory / target_memory));
-	set_console_progress(0, continuous_mode ? 0U : num_passes, 100.0);
+	update_progress(0, continuous_mode ? 0U : num_passes, 100.0);
 
 	term_printf(MSGTYPE_WHT, "Allocated memory : %012llu (0x%010llX)\n\n", allocated_memory, allocated_memory);
 
@@ -665,7 +641,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		term_puts(MSGTYPE_WHT, "Writing memory, please be patient, this will take a while...\n");
 		term_puts(MSGTYPE_MAG, "0.0%");
-		set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 0.0);
+		update_progress(pass + 1U, continuous_mode ? 0U : num_passes, 0.0);
 
 		completed = 0LL;
 
@@ -696,7 +672,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			{
 				const double progress = 100.0 * ((double)completed / allocated_memory);
 				term_printf(MSGTYPE_MAG, "\r%.1f%%", progress);
-				set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 0.5 * progress);
+				update_progress(pass + 1U, continuous_mode ? 0U : num_passes, 0.5 * progress);
 			}
 			else
 			{
@@ -734,7 +710,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 
 		term_puts(MSGTYPE_WHT, "Reading memory, please be patient, this will take a while...\n");
 		term_puts(MSGTYPE_MAG, "0.0%");
-		set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 50.0);
+		update_progress(pass + 1U, continuous_mode ? 0U : num_passes, 50.0);
 
 		completed = 0LL;
 
@@ -765,7 +741,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 			{
 				const double progress = 100.0 * ((double)completed / allocated_memory);
 				term_printf(MSGTYPE_MAG, "\r%.1f%%", progress);
-				set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 50.0 + (0.5 * progress));
+				update_progress(pass + 1U, continuous_mode ? 0U : num_passes, 50.0 + (0.5 * progress));
 			}
 			else
 			{
@@ -798,7 +774,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		}
 
 		term_printf(MSGTYPE_GRN, "\r%.1f%% [OK]\n\n", 100.0);
-		set_console_progress(pass + 1U, continuous_mode ? 0U : num_passes, 100.0);
+		update_progress(pass + 1U, continuous_mode ? 0U : num_passes, 100.0);
 
 		if ((SIZE_T)completed != allocated_memory)
 		{

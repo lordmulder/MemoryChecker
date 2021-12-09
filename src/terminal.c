@@ -4,26 +4,25 @@
 /******************************************************************************/
 
 #define WIN32_LEAN_AND_MEAN 1
-#define MAX_CHARS 384U
-#define BUFFER_SIZE (4U * MAX_CHARS)
 
 #include <Windows.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <process.h>
-#include <io.h>
 #include "terminal.h"
+
+#define MAX_WCHARS 384U
+#define MAX_U8CHAR (4U * MAX_WCHARS)
 
 static volatile LONG reference_counter = 0L;
 static CRITICAL_SECTION mutex;
+static BOOL color_mode = FALSE, is_tty = FALSE;
 static HANDLE handle = INVALID_HANDLE_VALUE;
-static DWORD file_type = FILE_TYPE_UNKNOWN;
-static WORD default_attributes = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
 static UINT default_cp = UINT_MAX;
-static BOOL color_mode = FALSE;
-static char buffer_utf8[BUFFER_SIZE];
-static wchar_t buffer_utf16[MAX_CHARS];
+static WORD default_attributes = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+static char buffer_utf8[MAX_U8CHAR];
+static wchar_t buffer_utf16[MAX_WCHARS];
 
 static const WORD BACKGROUND_MASK = BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED | BACKGROUND_INTENSITY;
 
@@ -93,20 +92,14 @@ static inline void write_to_file(const HANDLE h, const char *const text)
 	WriteFile(h, text, (DWORD)strlen(text), &bytes_written, NULL);
 }
 
-static inline void send_utf8(const msgtype_t type, const char *const text)
+static inline void print_utf8(const msgtype_t type, const char *const text)
 {
-	if (file_type == FILE_TYPE_CHAR)
+	if (is_tty)
 	{
-		if (color_mode)
-		{
-			SetConsoleTextAttribute(handle, (default_attributes & BACKGROUND_MASK) | get_text_color(type));
-			write_to_term(handle, text);
-			SetConsoleTextAttribute(handle, default_attributes);
-		}
-		else
-		{
-			write_to_term(handle, text);
-		}
+		const BOOL has_color = color_mode;
+		if (has_color) { SetConsoleTextAttribute(handle, (default_attributes & BACKGROUND_MASK) | get_text_color(type)); }
+		write_to_term(handle, text);
+		if (has_color) { SetConsoleTextAttribute(handle, default_attributes); }
 	}
 	else
 	{
@@ -114,11 +107,12 @@ static inline void send_utf8(const msgtype_t type, const char *const text)
 	}
 }
 
-static inline void send_utf16(const msgtype_t type, const wchar_t *const text)
+static inline void print_utf16(const msgtype_t type, const wchar_t *const text)
 {
-	if (WideCharToMultiByte(CP_UTF8, 0U, text, -1, buffer_utf8, BUFFER_SIZE, NULL, NULL) > 0U)
+	const DWORD result = WideCharToMultiByte(CP_UTF8, 0U, text, -1, buffer_utf8, MAX_U8CHAR, NULL, NULL);
+	if ((result > 0U) && (result <= MAX_U8CHAR))
 	{
-		send_utf8(type, buffer_utf8);
+		print_utf8(type, buffer_utf8);
 	}
 }
 
@@ -134,7 +128,7 @@ void term_init(void)
 		{
 			abort(); /*system error*/
 		}
-		if ((file_type = GetFileType(handle = GetStdHandle(STD_OUTPUT_HANDLE))) == FILE_TYPE_CHAR)
+		if ((is_tty = (GetFileType(handle = GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_CHAR)))
 		{
 			default_cp = GetConsoleOutputCP();
 			default_attributes = get_text_attributes(handle);
@@ -150,52 +144,64 @@ void term_enable_colors(const BOOL enable)
 	LeaveCriticalSection(&mutex);
 }
 
+void term_title_wset(const wchar_t *const text)
+{
+	SetConsoleTitleW(text);
+}
+
+void term_title_wsetf(const wchar_t *const format, ...)
+{
+	va_list ap;
+	EnterCriticalSection(&mutex);
+	va_start(ap, format);
+	VSNWPRINTF(buffer_utf16, MAX_WCHARS, format, ap);
+	va_end(ap);
+	term_title_wset(buffer_utf16);
+	LeaveCriticalSection(&mutex);
+}
+
 void term_puts(const msgtype_t type, const char *const text)
 {
 	EnterCriticalSection(&mutex);
-	send_utf8(type, text);
+	print_utf8(type, text);
 	LeaveCriticalSection(&mutex);
 }
 
 void term_putws(const msgtype_t type, const wchar_t *const text)
 {
 	EnterCriticalSection(&mutex);
-	send_utf16(type, text);
+	print_utf16(type, text);
 	LeaveCriticalSection(&mutex);
 }
 
 void term_printf(const msgtype_t type, const char *const format, ...)
 {
-	EnterCriticalSection(&mutex);
 	va_list ap;
+	EnterCriticalSection(&mutex);
 	va_start(ap, format);
-	VSNPRINTF(buffer_utf8, BUFFER_SIZE, format, ap);
+	VSNPRINTF(buffer_utf8, MAX_U8CHAR, format, ap);
 	va_end(ap);
-	send_utf8(type, buffer_utf8);
+	print_utf8(type, buffer_utf8);
 	LeaveCriticalSection(&mutex);
 }
 
 void term_wprintf(const msgtype_t type, const wchar_t *const format, ...)
 {
-	EnterCriticalSection(&mutex);
 	va_list ap;
+	EnterCriticalSection(&mutex);
 	va_start(ap, format);
-	VSNWPRINTF(buffer_utf16, MAX_CHARS, format, ap);
+	VSNWPRINTF(buffer_utf16, MAX_WCHARS, format, ap);
 	va_end(ap);
-	send_utf16(type, buffer_utf16);
+	print_utf16(type, buffer_utf16);
 	LeaveCriticalSection(&mutex);
 }
 
 void term_exit(void)
 {
 	const LONG counter = InterlockedDecrement(&reference_counter);
-	if (counter < 0L)
+	if (counter == 0L)
 	{
-		abort(); /*This is not supposed to happen!*/
-	}
-	else if (counter == 0L)
-	{
-		if (file_type == FILE_TYPE_CHAR)
+		if (is_tty)
 		{
 			SetConsoleTextAttribute(handle, default_attributes);
 			if (default_cp != UINT_MAX)
@@ -204,7 +210,28 @@ void term_exit(void)
 			}
 		}
 		handle = INVALID_HANDLE_VALUE;
-		file_type = FILE_TYPE_UNKNOWN;
+		is_tty = FALSE;
 		DeleteCriticalSection(&mutex);
 	}
+	else if (counter < 0L)
+	{
+		abort(); /*This is not supposed to happen!*/
+	}
+}
+
+void dbg_puts(const char* const text)
+{
+
+	OutputDebugStringA(text);
+}
+
+void dbg_printf(const char* const format, ...)
+{
+	va_list ap;
+	EnterCriticalSection(&mutex);
+	va_start(ap, format);
+	VSNPRINTF(buffer_utf8, MAX_U8CHAR, format, ap);
+	va_end(ap);
+	dbg_puts(buffer_utf8);
+	LeaveCriticalSection(&mutex);
 }
