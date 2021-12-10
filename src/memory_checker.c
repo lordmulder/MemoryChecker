@@ -507,18 +507,21 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		goto cleanup;
 	}
 
-	if ((!target_memory) || percent_mode)
+	if (!target_memory)
 	{
-		const double fraction = percent_mode ? (bound(1U, target_memory, 100U) / 100.0) : 0.9;
-		target_memory = (SIZE_T) round(phys_memory.total * fraction);
-	}
-	else
-	{
-		if (target_memory > phys_memory.total)
+		if ((target_memory = (SIZE_T) round(phys_memory.total * 0.9)) < phys_memory.avail)
 		{
-			term_puts(MSGTYPE_RED, "\nError: Specified memory size exceeds the total physical memory size!\n\n");
-			goto cleanup;
+			target_memory = phys_memory.avail;
 		}
+	}
+	else if (percent_mode)
+	{
+		target_memory = (SIZE_T) round(phys_memory.total * (bound(1U, target_memory, 100U) / 100.0));
+	}
+	else if (target_memory > phys_memory.total)
+	{
+		term_puts(MSGTYPE_RED, "\nError: Specified memory size exceeds the total physical memory size!\n\n");
+		goto cleanup;
 	}
 
 	target_memory = round_up(target_memory, page_size);
