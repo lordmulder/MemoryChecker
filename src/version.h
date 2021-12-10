@@ -3,8 +3,8 @@
 /* This work has been released under the CC0 1.0 Universal license!           */
 /******************************************************************************/
 
-#ifndef INC_VERSION_H
-#define INC_VERSION_H
+#ifndef INC_MEMCHCKR_VERSION_H
+#define INC_MEMCHCKR_VERSION_H
 
 #define MEMCK_VERSION_MAJOR    1
 #define MEMCK_VERSION_MINOR_HI 0

@@ -3,8 +3,8 @@
 /* This work has been released under the CC0 1.0 Universal license!           */
 /******************************************************************************/
 
-#ifndef INC_TERMINAL_H
-#define INC_TERMINAL_H
+#ifndef INC_MEMCHCKR_TERMINAL_H
+#define INC_MEMCHCKR_TERMINAL_H
 
 #ifndef _WINDOWS_
 #error Must include <Windows.h> before including this header!

@@ -287,12 +287,15 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="src\allocate.h" />
     <ClInclude Include="src\md5.h" />
     <ClInclude Include="src\random.h" />
     <ClInclude Include="src\terminal.h" />
+    <ClInclude Include="src\utils.h" />
     <ClInclude Include="src\version.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="src\allocate.c" />
     <ClCompile Include="src\memory_checker.c" />
     <ClCompile Include="src\md5.c" />
     <ClCompile Include="src\random.c" />

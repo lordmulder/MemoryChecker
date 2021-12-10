@@ -196,6 +196,22 @@ void term_wprintf(const msgtype_t type, const wchar_t *const format, ...)
 	LeaveCriticalSection(&mutex);
 }
 
+void dbg_puts(const char* const text)
+{
+	OutputDebugStringA(text);
+}
+
+void dbg_printf(const char* const format, ...)
+{
+	va_list ap;
+	EnterCriticalSection(&mutex);
+	va_start(ap, format);
+	VSNPRINTF(buffer_utf8, MAX_U8CHAR, format, ap);
+	va_end(ap);
+	dbg_puts(buffer_utf8);
+	LeaveCriticalSection(&mutex);
+}
+
 void term_exit(void)
 {
 	const LONG counter = InterlockedDecrement(&reference_counter);
@@ -217,21 +233,4 @@ void term_exit(void)
 	{
 		abort(); /*This is not supposed to happen!*/
 	}
-}
-
-void dbg_puts(const char* const text)
-{
-
-	OutputDebugStringA(text);
-}
-
-void dbg_printf(const char* const format, ...)
-{
-	va_list ap;
-	EnterCriticalSection(&mutex);
-	va_start(ap, format);
-	VSNPRINTF(buffer_utf8, MAX_U8CHAR, format, ap);
-	va_end(ap);
-	dbg_puts(buffer_utf8);
-	LeaveCriticalSection(&mutex);
 }

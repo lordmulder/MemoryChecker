@@ -16,12 +16,14 @@
 #include <wchar.h>
 #include <math.h>
 #include <process.h>
+#include "utils.h"
+#include "allocate.h"
 #include "terminal.h"
 #include "random.h"
 #include "md5.h"
 #include "version.h"
 
-#define MAX_CHUNKS 4096U
+#define MAX_CHUNKS 8192U
 #define MAX_THREAD 32U
 #define MIN_MEMORY (512U * 1024U * 1024U)
 #define RW_BUFSIZE ((SIZE_T)16U)
@@ -30,13 +32,6 @@
 /* ====================================================================== */
 /* Typedefs                                                               */
 /* ====================================================================== */
-
-typedef struct
-{
-	SIZE_T total;
-	SIZE_T avail;
-}
-meminfo_t;
 
 typedef struct
 {
@@ -93,56 +88,6 @@ static LONG unhandled_exception_filter(const PEXCEPTION_POINTERS ex_info)
 	return 0L;
 }
 
-static meminfo_t get_physical_memory_size()
-{
-	meminfo_t memory_info = { 0U, 0U };
-	MEMORYSTATUSEX status;
-	SecureZeroMemory(&status, sizeof(MEMORYSTATUSEX));
-	status.dwLength = sizeof(MEMORYSTATUSEX);
-	if (GlobalMemoryStatusEx(&status))
-	{
-		memory_info.total = status.ullTotalPhys;
-		memory_info.avail = status.ullAvailPhys;
-	}
-	return memory_info;
-}
-
-static SIZE_T get_page_size()
-{
-	SYSTEM_INFO info;
-	SecureZeroMemory(&info, sizeof(SYSTEM_INFO));
-	GetSystemInfo(&info);
-	return info.dwPageSize;
-}
-
-static SIZE_T get_cpu_count()
-{
-	SYSTEM_INFO info;
-	SecureZeroMemory(&info, sizeof(SYSTEM_INFO));
-	GetSystemInfo(&info);
-	return info.dwNumberOfProcessors;
-}
-
-static inline ULONG64 get_performance_frequency()
-{
-	LARGE_INTEGER value;
-	if (QueryPerformanceFrequency(&value))
-	{
-		return value.QuadPart;
-	}
-	return 1U;
-}
-
-static inline ULONG64 query_performance_counter()
-{
-	LARGE_INTEGER value;
-	if (QueryPerformanceCounter(&value))
-	{
-		return value.QuadPart;
-	}
-	return 0U;
-}
-
 static BOOL set_process_priority(const BOOL high_priority)
 {
 	const DWORD current_priority = GetPriorityClass(GetCurrentProcess());
@@ -151,20 +96,6 @@ static BOOL set_process_priority(const BOOL high_priority)
 		return TRUE;
 	}
 	return SetPriorityClass(GetCurrentProcess(), high_priority ? HIGH_PRIORITY_CLASS : ABOVE_NORMAL_PRIORITY_CLASS);
-}
-
-static PVOID allocate_chunk(const SIZE_T size)
-{
-	const PVOID addr = VirtualAllocEx(GetCurrentProcess(), NULL, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE | PAGE_NOCACHE);
-	if (addr)
-	{
-		if (VirtualLock(addr, size))
-		{
-			return addr;
-		}
-		VirtualFree(addr, 0, MEM_RELEASE);
-	}
-	return NULL;
 }
 
 static LONG read_envvar(const wchar_t *const name, ULONG64 *const value)
@@ -205,32 +136,6 @@ static inline void debug_digest(const SIZE_T index, const BYTE* const digest, co
 		index, read_mode ? "RD" : "WR",
 		digest[0U], digest[1U], digest[ 2U], digest[ 3U], digest[ 4U], digest[ 5U], digest[ 6U], digest[ 7U],
 		digest[8U], digest[9U], digest[10U], digest[11U], digest[12U], digest[13U], digest[14U], digest[15U]);
-}
-
-static inline SIZE_T get_max(const SIZE_T a, const SIZE_T b)
-{
-	return (a > b) ? a : b;
-}
-
-static inline SIZE_T get_min(const SIZE_T a, const SIZE_T b)
-{
-	return (a < b) ? a : b;
-}
-
-static inline SIZE_T bound(const SIZE_T min, const SIZE_T val, const SIZE_T max)
-{
-	return get_max(min, get_min(max, val));
-}
-
-static inline SIZE_T round_up(const SIZE_T number, const SIZE_T multiple)
-{
-
-	const SIZE_T remainder = number % multiple;
-	if (remainder != 0U)
-	{
-		return number - remainder + multiple;
-	}
-	return number;
 }
 
 static inline void print_app_logo(void)
@@ -367,8 +272,7 @@ static UINT32 thread_check(void* const arg)
 static int memchecker_main(const int argc, const wchar_t* const argv[])
 {
 	int exit_code = EXIT_FAILURE, arg_offset = 1;
-	SIZE_T target_memory = 0U, allocated_memory = 0U, page_size = 0U;
-	SIZE_T chunk_size = 0U, working_set_size = 0U, pass = 0U, chunk_idx = 0U, thread_idx = 0U;
+	SIZE_T target_memory = 0U, allocated_memory = 0U, page_size = 0U, chunk_size = 0U, pass = 0U, chunk_idx = 0U, thread_idx = 0U;
 	ULONG64 clock_frequency = 1U, clock_total[2U] = { 0U, 0U }, clock_pass[2U] = { 0U, 0U };
 	BOOL batch_mode = FALSE, continuous_mode = FALSE, percent_mode = FALSE, high_priority = FALSE;
 	meminfo_t phys_memory;
@@ -491,7 +395,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		goto cleanup;
 	}
 
-	phys_memory = get_physical_memory_size();
+	phys_memory = get_physical_memory_info();
 	if ((phys_memory.total < 1U) || (phys_memory.avail < 1U))
 	{
 		term_puts(MSGTYPE_RED, "System error: Failed to determine physical memory size!\n\n");
@@ -507,20 +411,17 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		goto cleanup;
 	}
 
-	if (!target_memory)
-	{
-		if ((target_memory = (SIZE_T) round(phys_memory.total * 0.9)) < phys_memory.avail)
-		{
-			target_memory = phys_memory.avail;
-		}
-	}
-	else if (percent_mode)
+	if (percent_mode)
 	{
 		target_memory = (SIZE_T) round(phys_memory.total * (bound(1U, target_memory, 100U) / 100.0));
 	}
+	else if (!target_memory)
+	{
+		target_memory = get_max((SIZE_T)round(phys_memory.total * 0.9), (SIZE_T)round(phys_memory.avail * 0.99));
+	}
 	else if (target_memory > phys_memory.total)
 	{
-		term_puts(MSGTYPE_RED, "\nError: Specified memory size exceeds the total physical memory size!\n\n");
+		term_puts(MSGTYPE_RED, "\nError: Specified memory size exceeds total physical memory size!\n\n");
 		goto cleanup;
 	}
 
@@ -555,10 +456,9 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	/* Allocated memory                                      */
 	/* ----------------------------------------------------- */
 
-	working_set_size = target_memory + ((IsWindowsVistaOrGreater() ? 128U : 4096U) * page_size);
-	if (!SetProcessWorkingSetSize(GetCurrentProcess(), working_set_size, working_set_size))
+	if (!change_working_set_size(target_memory + ((IsWindowsVistaOrGreater() ? 128U : 4096U) * page_size)))
 	{
-		term_puts(MSGTYPE_YLW, "WARNING: Failed to set working set size. Memory allocation is probably going to fail!\n\n");
+		term_puts(MSGTYPE_YLW, "WARNING: Failed to change working set size. Allocation is likely to fail !!!\n\n");
 	}
 
 	term_puts(MSGTYPE_WHT, "Allocating memory, please be patient, this will take a while...\n");
@@ -566,7 +466,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 	update_progress(0, continuous_mode ? 0U : num_passes, 0.0);
 
 	SecureZeroMemory(CHUNKS, sizeof(chunk_t) * MAX_CHUNKS);
-	chunk_size = round_up(128U * 1024U * 1024U, page_size);
+	chunk_size = round_up(get_max(8U * 1024U * 1024U, get_min(256U * 1024U * 1024U, target_memory / num_threads)), page_size);
 
 	while ((!stop) && (chunk_size >= page_size) && (allocated_memory < target_memory))
 	{
@@ -574,7 +474,7 @@ static int memchecker_main(const int argc, const wchar_t* const argv[])
 		ULONG32 retry_counter = 0U;
 		while ((!stop) && (remaining >= chunk_size) && (num_chunks < MAX_CHUNKS))
 		{
-			LPVOID addr = allocate_chunk(chunk_size);
+			LPVOID addr = allocate_physical_memory(chunk_size);
 			if (addr)
 			{
 				chunk_t *const current_chunk = &CHUNKS[num_chunks++];
@@ -815,12 +715,13 @@ cleanup:
 
 	term_printf(MSGTYPE_WHT, "Goodbye!\n\nTest run completed after %.2f seconds.\n\n", (clock_total[1U] - clock_total[0U]) / ((double)clock_frequency));
 
+	term_exit();
+
 	if (!(batch_mode || stop))
 	{
 		system("pause"); /*prevent terminal from closing*/
 	}
 
-	term_exit();
 	return exit_code;
 }
 
