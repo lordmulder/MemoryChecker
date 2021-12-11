@@ -20,6 +20,8 @@ meminfo_t;
 SIZE_T get_page_size();
 BOOL change_working_set_size(const SIZE_T size);
 meminfo_t get_physical_memory_info();
+
 PVOID allocate_physical_memory(const SIZE_T size);
+void free_physical_memory(const PVOID addr);
 
 #endif

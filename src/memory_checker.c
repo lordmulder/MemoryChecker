@@ -708,9 +708,9 @@ cleanup:
 		chunk_t *const current_chunk = &CHUNKS[chunk_idx];
 		if (current_chunk->addr)
 		{
-			VirtualFree(current_chunk->addr, 0U, MEM_RELEASE);
+			free_physical_memory(current_chunk->addr);
+			current_chunk->addr = NULL;
 		}
-		current_chunk->addr = NULL;
 	}
 
 	term_printf(MSGTYPE_WHT, "Goodbye!\n\nTest run completed after %.2f seconds.\n\n", (clock_total[1U] - clock_total[0U]) / ((double)clock_frequency));

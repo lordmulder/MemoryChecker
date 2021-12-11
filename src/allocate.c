@@ -46,7 +46,12 @@ PVOID allocate_physical_memory(const SIZE_T size)
 		{
 			return addr;
 		}
-		VirtualFree(addr, 0, MEM_RELEASE);
+		free_physical_memory(addr);
 	}
 	return NULL;
+}
+
+void free_physical_memory(const PVOID addr)
+{
+	VirtualFree(addr, 0U, MEM_RELEASE);
 }
